@@ -29,4 +29,21 @@ const findUserByToken = async (token) => {
     return result.rows[0];
 };
 
-export { createUser, findUserByEmail, verifyUser, findUserByToken };
+const saveRefreshToken = async (userId, refreshToken) => {
+    const result = await pool.query(
+        'UPDATE users SET refresh_token = $1 WHERE id = $2 RETURNING id, username, email',
+        [refreshToken, userId]
+    );
+    return result.rows[0];
+};
+
+const findUserByRefreshToken = async (refreshToken) => {
+    const result = await pool.query('SELECT * FROM users WHERE refresh_token = $1', [refreshToken]);
+    return result.rows[0];
+};
+
+const clearRefreshToken = async (userId) => {
+    await pool.query('UPDATE users SET refresh_token = NULL WHERE id = $1', [userId]);
+};
+
+export { createUser, findUserByEmail, verifyUser, findUserByToken, saveRefreshToken, findUserByRefreshToken, clearRefreshToken };
