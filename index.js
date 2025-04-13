@@ -1,16 +1,15 @@
-const express = require('express');
+import express from 'express';
+import dotenv from 'dotenv';
+import authRoutes from './routes/authRoutes.js';
+
+dotenv.config();
+
 const app = express();
 const port = 3000;
 
-// Middleware để parse JSON từ request
 app.use(express.json());
+app.use('/api/auth', authRoutes);
 
-// Route cơ bản để kiểm tra server
-app.get('/', (req, res) => {
-    res.send('Hello, Project Management Backend!');
-});
-
-// Khởi động server
 app.listen(port, () => {
     console.log(`Server chạy tại http://localhost:${port}`);
 });
