@@ -10,6 +10,7 @@ const initUsersDb = async () => {
                 password VARCHAR(255) NOT NULL,
                 is_verified BOOLEAN DEFAULT FALSE,
                 verification_token VARCHAR(255),
+                refresh_token VARCHAR(255),
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             );
         `);
