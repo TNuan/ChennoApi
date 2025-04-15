@@ -2,6 +2,7 @@ import express from 'express';
 import dotenv from 'dotenv';
 import authRoutes from './routes/authRoutes.js';
 import workspaceRoutes from './routes/workspaceRoutes.js';
+import boardRoutes from './routes/boardRoutes.js';
 
 dotenv.config();
 
@@ -11,6 +12,7 @@ const port = 3000;
 app.use(express.json());
 app.use('/api/auth', authRoutes);
 app.use('/api/workspaces', workspaceRoutes);
+app.use('/api/boards', boardRoutes);
 
 app.listen(port, () => {
     console.log(`Server chạy tại http://localhost:${port}`);
