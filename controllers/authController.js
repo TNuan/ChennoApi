@@ -72,15 +72,23 @@ const login = async (req, res) => {
         const refreshToken = jwt.sign(
             { id: user.id, username: user.username },
             env.JWT_SECRET,
-            { expiresIn: '7d' } // Refresh token hết hạn sau 7 ngày
+            { expiresIn: '7d' }
         );
 
         await saveRefreshToken(user.id, refreshToken);
+
+        // Trả về thêm thông tin user
+        const userInfo = {
+            id: user.id,
+            username: user.username,
+            email: user.email
+        };
 
         res.json({
             message: 'Đăng nhập thành công',
             accessToken,
             refreshToken,
+            user: userInfo
         });
     } catch (err) {
         res.status(500).json({ message: 'Lỗi server', error: err.message });
