@@ -38,4 +38,10 @@ router.put(
 
 router.delete('/:id', authenticateToken, BoardController.remove);
 
+router.get('/user/boards', authenticateToken, BoardController.getBoardsByUser);
+router.get('/user/recent-boards', authenticateToken, BoardController.getRecentlyViewedBoards);
+router.get('/user/workspaces', authenticateToken, BoardController.getAllWorkspaces);
+
+router.post('/:board_id/members', authenticateToken, BoardController.addMember);
+
 export default router;
