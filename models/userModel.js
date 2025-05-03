@@ -31,7 +31,7 @@ const findUserByToken = async (token) => {
 
 const saveRefreshToken = async (userId, refreshToken) => {
     const result = await pool.query(
-        'UPDATE users SET refresh_token = $1 WHERE id = $2 RETURNING id, username, email',
+        'UPDATE users SET refresh_token = $1 WHERE id = $2 RETURNING username, email',
         [refreshToken, userId]
     );
     return result.rows[0];

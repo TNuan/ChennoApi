@@ -1,7 +1,6 @@
 import express from 'express';
 import cors from 'cors'
 import dotenv from 'dotenv';
-import cors from 'cors';
 import authRoutes from './routes/authRoutes.js';
 import workspaceRoutes from './routes/workspaceRoutes.js';
 import boardRoutes from './routes/boardRoutes.js';

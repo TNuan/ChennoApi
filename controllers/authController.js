@@ -122,10 +122,10 @@ const refreshToken = async (req, res) => {
 
             const accessToken = jwt.sign(
                 { id: user.id, username: user.username },
-                env.ACCESS_TOKEN_EXPIRES,
-                { expiresIn: env.ACCESS_TOKEN_SECRET }
+                env.ACCESS_TOKEN_SECRET,
+                { expiresIn: env.ACCESS_TOKEN_EXPIRES }
             );
-
+            
             res.json({ message: 'Làm mới token thành công', accessToken });
         });
     } catch (err) {
