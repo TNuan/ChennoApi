@@ -3,6 +3,7 @@ import jwt from 'jsonwebtoken';
 import { createUser, findUserByEmail, verifyUser, findUserByToken, saveRefreshToken, findUserByRefreshToken, clearRefreshToken } from '../models/userModel.js';
 import { sendVerificationEmail } from '../utils/email.js';
 import { env } from '../config/environment.js'
+import { HttpStatusCode } from '../utils/constants.js';
 
 const register = async (req, res) => {
     const { username, email, password } = req.body;
@@ -10,7 +11,7 @@ const register = async (req, res) => {
     try {
         const existingUser = await findUserByEmail(email);
         if (existingUser) {
-            return res.status(400).json({ message: 'Email đã được sử dụng' });
+            return res.status(HttpStatusCode.OK).json({status: false, msg: 'Email đã được sử dụng' });
         }
 
         const verification_token = jwt.sign({ email }, env.JWT_SECRET, { expiresIn: '1h' });
@@ -18,30 +19,30 @@ const register = async (req, res) => {
 
         await sendVerificationEmail(email, verification_token);
 
-        res.status(201).json({ message: 'Đăng ký thành công. Vui lòng kiểm tra email để xác thực.', user });
+        res.status(HttpStatusCode.OK).json({status: true, msg: 'Đăng ký thành công. Vui lòng kiểm tra email để xác thực.', user });
     } catch (err) {
         console.error('Registration error:', err);
-        res.status(500).json({ message: 'Lỗi server', error: err.message });
+        res.status(HttpStatusCode.INTERNAL_SERVER).json({ msg: 'Lỗi server', error: err.message });
     }
 };
 
 const verifyEmail = async (req, res) => {
-    const { token } = req.query;
+    const { token } = req.body;
 
     try {
         const user = await findUserByToken(token);
         if (!user) {
-            return res.status(400).json({ message: 'Token không hợp lệ hoặc đã hết hạn' });
+            return res.status(HttpStatusCode.OK).json({status: false, message: 'Token không hợp lệ hoặc đã hết hạn' });
         }
 
         const verifiedUser = await verifyUser(token);
         if (!verifiedUser) {
-            return res.status(400).json({ message: 'Tài khoản đã được xác thực hoặc token không hợp lệ' });
+            return res.status(HttpStatusCode.OK).json({status: false, message: 'Tài khoản đã được xác thực hoặc token không hợp lệ' });
         }
 
-        res.json({ message: 'Xác thực email thành công', user: verifiedUser });
+        res.json({status: true, message: 'Xác thực email thành công', user: verifiedUser });
     } catch (err) {
-        res.status(500).json({ message: 'Lỗi server', error: err.message });
+        res.status(HttpStatusCode.INTERNAL_SERVER).json({ message: 'Lỗi server', error: err.message });
     }
 };
 
@@ -51,43 +52,49 @@ const login = async (req, res) => {
     try {
         const user = await findUserByEmail(email);
         if (!user) {
-            return res.status(400).json({ message: 'Email hoặc mật khẩu không đúng' });
+            return res.status(400).json({status: false, message: 'Email hoặc mật khẩu không đúng' });
         }
 
         if (!user.is_verified) {
-            return res.status(403).json({ message: 'Tài khoản chưa được xác thực. Vui lòng kiểm tra email.' });
+            return res.status(403).json({status: false, message: 'Tài khoản chưa được xác thực. Vui lòng kiểm tra email.' });
         }
 
         const isMatch = await bcrypt.compare(password, user.password);
         if (!isMatch) {
-            return res.status(400).json({ message: 'Email hoặc mật khẩu không đúng' });
+            return res.status(400).json({status: false, message: 'Email hoặc mật khẩu không đúng' });
         }
 
         const accessToken = jwt.sign(
             { id: user.id, username: user.username },
-            env.JWT_SECRET,
-            { expiresIn: '1h' }
+            env.ACCESS_TOKEN_SECRET,
+            { expiresIn: env.ACCESS_TOKEN_EXPIRES }
         );
 
         const refreshToken = jwt.sign(
             { id: user.id, username: user.username },
-            env.JWT_SECRET,
-            { expiresIn: '7d' }
+            env.REFRESH_TOKEN_SECRET,
+            { expiresIn: env.REFRESH_TOKEN_EXPIRES }
         );
 
         await saveRefreshToken(user.id, refreshToken);
 
         // Trả về thêm thông tin user
         const userInfo = {
-            id: user.id,
+            // id: user.id,
             username: user.username,
             email: user.email
         };
 
+        res.cookie('refreshToken', refreshToken, {
+            httpOnly: true,
+            secure: false,
+            sameSite: 'Strict', // Ngăn chặn CSRF
+        });
+
         res.json({
+            status: true,
             message: 'Đăng nhập thành công',
             accessToken,
-            refreshToken,
             user: userInfo
         });
     } catch (err) {
@@ -96,7 +103,7 @@ const login = async (req, res) => {
 };
 
 const refreshToken = async (req, res) => {
-    const { refreshToken } = req.body;
+    const { refreshToken } = req.cookies; // Lấy refresh token từ cookie
 
     if (!refreshToken) {
         return res.status(401).json({ message: 'Thiếu refresh token' });
@@ -108,15 +115,15 @@ const refreshToken = async (req, res) => {
             return res.status(403).json({ message: 'Refresh token không hợp lệ' });
         }
 
-        jwt.verify(refreshToken, env.JWT_SECRET, (err, decoded) => {
+        jwt.verify(refreshToken, env.REFRESH_TOKEN_SECRET, (err, decoded) => {
             if (err) {
                 return res.status(403).json({ message: 'Refresh token không hợp lệ hoặc đã hết hạn' });
             }
 
             const accessToken = jwt.sign(
                 { id: user.id, username: user.username },
-                env.JWT_SECRET,
-                { expiresIn: '1h' }
+                env.ACCESS_TOKEN_EXPIRES,
+                { expiresIn: env.ACCESS_TOKEN_SECRET }
             );
 
             res.json({ message: 'Làm mới token thành công', accessToken });
@@ -127,7 +134,7 @@ const refreshToken = async (req, res) => {
 };
 
 const logout = async (req, res) => {
-    const { refreshToken } = req.body;
+    const refreshToken = req.cookies.refreshToken; // Lấy refresh token từ cookie
 
     if (!refreshToken) {
         return res.status(401).json({ message: 'Thiếu refresh token' });
@@ -139,8 +146,10 @@ const logout = async (req, res) => {
             return res.status(403).json({ message: 'Refresh token không hợp lệ' });
         }
 
+        // Xóa refresh token trong database
         await clearRefreshToken(user.id);
-        res.json({ message: 'Đăng xuất thành công' });
+        res.clearCookie('refreshToken', { httpOnly: true, secure: false, sameSite: 'Strict' }); // Xóa cookie refresh token
+        res.json({status: true, message: 'Đăng xuất thành công' });
     } catch (err) {
         res.status(500).json({ message: 'Lỗi server', error: err.message });
     }
