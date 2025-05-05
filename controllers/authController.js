@@ -106,7 +106,7 @@ const refreshToken = async (req, res) => {
     const { refreshToken } = req.cookies; // Lấy refresh token từ cookie
 
     if (!refreshToken) {
-        return res.status(401).json({ message: 'Thiếu refresh token' });
+        return res.status(403).json({ message: 'Thiếu refresh token' });
     }
 
     try {
@@ -137,7 +137,7 @@ const logout = async (req, res) => {
     const refreshToken = req.cookies.refreshToken; // Lấy refresh token từ cookie
 
     if (!refreshToken) {
-        return res.status(401).json({ message: 'Thiếu refresh token' });
+        return res.status(403).json({ message: 'Thiếu refresh token' });
     }
 
     try {
