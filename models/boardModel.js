@@ -3,8 +3,7 @@ import pool from '../config/db.js';
 const createBoard = async ({ workspace_id, name, description, created_by }) => {
     const client = await pool.connect();
     try {
-        await client.query('BEGIN');
-        // Kiểm tra workspace_id có tồn tại không
+        await client.query('BEGIN');        
         const workspaceResult = await client.query(
             'SELECT 1 FROM workspaces WHERE id = $1',
             [workspace_id]
@@ -12,30 +11,49 @@ const createBoard = async ({ workspace_id, name, description, created_by }) => {
         if (!workspaceResult.rows[0]) {
             throw new Error('Workspace không tồn tại');
         }
-        // Kiểm tra user có trong workspace
+
         const accessResult = await client.query(
             'SELECT 1 FROM workspace_members WHERE workspace_id = $1 AND user_id = $2',
             [workspace_id, created_by]
         );
 
-        console.log('Access result:', accessResult.rows[0]);
         if (!accessResult.rows[0]) {
             throw new Error('Bạn không có quyền tạo board trong workspace này');
         }
 
-        // Tạo board
         const boardQuery = `
-            INSERT INTO boards (workspace_id, name, description, created_by)
-            VALUES ($1, $2, $3, $4)
-            RETURNING *
+            INSERT INTO boards (
+                workspace_id, 
+                name, 
+                description, 
+                created_by,
+                cover_img,
+                is_favorite
+            )
+            VALUES ($1, $2, $3, $4, NULL, FALSE)
+            RETURNING 
+                id,
+                workspace_id,
+                name,
+                description,
+                created_by,
+                created_at,
+                updated_at,
+                cover_img,
+                is_favorite
         `;
-        const boardResult = await client.query(boardQuery, [workspace_id, name, description, created_by]);
+        const boardResult = await client.query(boardQuery, [
+            workspace_id, 
+            name, 
+            description, 
+            created_by
+        ]);
         const board = boardResult.rows[0];
 
-        // Thêm creator như owner của board
         const memberQuery = `
             INSERT INTO board_members (board_id, user_id, role)
             VALUES ($1, $2, 'owner')
+            RETURNING *
         `;
         await client.query(memberQuery, [board.id, created_by]);
 
@@ -101,18 +119,61 @@ const getBoardById = async (id, userId) => {
     return result.rows[0];
 };
 
-const updateBoard = async (boardId, userId, { name, description }) => {
-    const result = await pool.query(
-        `
-        UPDATE boards b
-        SET name = $1, description = $2
-        FROM workspace_members wm
-        WHERE b.id = $3 AND b.workspace_id = wm.workspace_id AND wm.user_id = $4 AND wm.role IN ('owner', 'admin')
-        RETURNING b.id, b.workspace_id, b.name, b.description, b.created_by, b.created_at
-        `,
-        [name, description, boardId, userId]
-    );
-    return result.rows[0];
+const updateBoard = async (boardId, userId, { workspace_id, name, description, cover_img, is_favorite }) => {
+    // Start a transaction since we're checking workspace membership
+    const client = await pool.connect();
+    try {
+        await client.query('BEGIN');
+
+        // Check if user has access to target workspace if workspace_id is provided
+        if (workspace_id) {
+            const workspaceAccessCheck = await client.query(
+                `SELECT 1 FROM workspace_members 
+                 WHERE workspace_id = $1 AND user_id = $2`,
+                [workspace_id, userId]
+            );
+            if (!workspaceAccessCheck.rows[0]) {
+                throw new Error('Bạn không có quyền chuyển board đến workspace này');
+            }
+        }
+
+        // Update board with all possible fields
+        const result = await client.query(
+            `
+            UPDATE boards b
+            SET 
+                workspace_id = COALESCE($1, b.workspace_id),
+                name = COALESCE($2, b.name),
+                description = $3,
+                cover_img = $4,
+                is_favorite = $5
+            FROM board_members bm
+            WHERE b.id = $6 
+            AND bm.board_id = b.id 
+            AND bm.user_id = $7 
+            AND bm.role IN ('owner', 'admin')
+            RETURNING 
+                b.id, 
+                b.workspace_id, 
+                b.name, 
+                b.description, 
+                b.cover_img,
+                b.is_favorite,
+                b.created_by, 
+                b.created_at,
+                b.updated_at
+            `,
+            [workspace_id, name, description, cover_img, is_favorite, boardId, userId]
+        );
+
+        await client.query('COMMIT');
+        return result.rows[0];
+    } catch (error) {
+        await client.query('ROLLBACK');
+        throw error;
+    } finally {
+        client.release();
+    }
 };
 
 const deleteBoard = async (boardId, userId) => {
@@ -143,7 +204,7 @@ const getBoardsByUserId = async (userId) => {
 
 const getRecentlyViewedBoards = async (userId, limit) => {
     const query = `
-        SELECT b.* FROM boards b
+        SELECT b.*, bv.viewed_at FROM boards b
         JOIN board_views bv ON b.id = bv.board_id
         WHERE bv.user_id = $1
         ORDER BY bv.viewed_at DESC

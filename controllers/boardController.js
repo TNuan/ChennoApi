@@ -1,14 +1,26 @@
 import { BoardModel } from '../models/boardModel.js';
 
 const create = async (req, res) => {
-    const { workspace_id, name, description } = req.body;
+    const { workspace_id, name, description, cover_img } = req.body;
     const created_by = req.user.id;
 
     try {
-        const board = await BoardModel.createBoard({ workspace_id, name, description, created_by });
-        res.status(201).json({ message: 'Tạo board thành công', board });
+        // Check required fields
+        if (!workspace_id || !name) {
+            return res.status(400).json({ message: 'Workspace ID và tên board là bắt buộc' });
+        }
+        const board = await BoardModel.createBoard({ 
+            workspace_id, 
+            name, 
+            description: description || null, 
+            created_by,
+            cover_img: cover_img || null,
+            is_favorite: false
+        });
+
+        res.status(201).json({ status: true,message: 'Tạo board thành công', board });
     } catch (err) {
-        res.status(400).json({ message: err.message });
+        res.status(400).json({ status: false, message: err.message });
     }
 };
 
@@ -47,15 +59,22 @@ const getById = async (req, res) => {
 
 const update = async (req, res) => {
     const { id } = req.params;
-    const { name, description } = req.body;
+    const { workspace_id, name, description, cover_img, is_favorite } = req.body;
     const userId = req.user.id;
 
     try {
-        const board = await BoardModel.updateBoard(id, userId, { name, description });
+        const board = await BoardModel.updateBoard(id, userId, { workspace_id, name, description, cover_img, is_favorite });
+
         if (!board) {
-            return res.status(403).json({ message: 'Board không tồn tại hoặc bạn không có quyền cập nhật' });
+            return res.status(403).json({ 
+                message: 'Board không tồn tại hoặc bạn không có quyền cập nhật' 
+            });
         }
-        res.json({ message: 'Cập nhật board thành công', board });
+
+        res.json({ 
+            message: 'Cập nhật board thành công', 
+            board 
+        });
     } catch (err) {
         res.status(400).json({ message: err.message });
     }
@@ -88,11 +107,13 @@ const getBoardsByUser = async (req, res) => {
 };
 
 const getRecentlyViewedBoards = async (req, res) => {
+    console.log('req.user', req.user.id);
     const userId = req.user.id;
     const limit = req.query.limit || 10; // Default limit 10 boards
 
     try {
         const boards = await BoardModel.getRecentlyViewedBoards(userId, limit);
+        console.log('boards', boards);
         res.json({ message: 'Lấy danh sách boards gần đây thành công', boards });
     } catch (err) {
         res.status(400).json({ message: err.message });
