@@ -1,7 +1,7 @@
 import express from 'express';
 import cors from 'cors'
 import dotenv from 'dotenv';
-import authRoutes from './routes/authRoutes.js';
+import userRoutes from './routes/userRoutes.js';
 import workspaceRoutes from './routes/workspaceRoutes.js';
 import boardRoutes from './routes/boardRoutes.js';
 import columnRoutes from './routes/columnRoutes.js';
@@ -22,7 +22,7 @@ app.use(cors({
 
 app.use(express.json());
 app.use(cookieParser());
-app.use('/api/auth', authRoutes);
+app.use('/api/users', userRoutes);
 app.use('/api/workspaces', workspaceRoutes);
 app.use('/api/boards', boardRoutes);
 app.use('/api/columns', columnRoutes);

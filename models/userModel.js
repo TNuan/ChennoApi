@@ -16,6 +16,23 @@ const findUserByEmail = async (email) => {
     return result.rows[0];
 };
 
+const searchUser = async (key) => {
+    const query = `
+        SELECT 
+            id,
+            username,
+            email,
+            created_at
+        FROM users 
+        WHERE username ILIKE $1 OR email ILIKE $1
+        AND is_verified = true
+        ORDER BY username
+        LIMIT 10
+    `;
+    const result = await pool.query(query, [`${key}%`]);
+    return result.rows;
+};
+
 const verifyUser = async (token) => {
     const result = await pool.query(
         'UPDATE users SET is_verified = TRUE, verification_token = NULL WHERE verification_token = $1 AND is_verified = FALSE RETURNING id, username, email, is_verified',
@@ -46,4 +63,4 @@ const clearRefreshToken = async (userId) => {
     await pool.query('UPDATE users SET refresh_token = NULL WHERE id = $1', [userId]);
 };
 
-export { createUser, findUserByEmail, verifyUser, findUserByToken, saveRefreshToken, findUserByRefreshToken, clearRefreshToken };
+export const UserModel = { createUser, findUserByEmail, searchUser, verifyUser, findUserByToken, saveRefreshToken, findUserByRefreshToken, clearRefreshToken };

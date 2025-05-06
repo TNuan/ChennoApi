@@ -1,5 +1,6 @@
 import express from 'express';
-import { register, verifyEmail, login, refreshToken, logout } from '../controllers/authController.js';
+import { UserController } from '../controllers/userController.js';
+import authenticateToken from '../middleware/authMiddleware.js';
 import { body, validationResult } from 'express-validator';
 
 const router = express.Router();
@@ -20,10 +21,10 @@ router.post(
         body('password').isLength({ min: 6 }).withMessage('Mật khẩu phải có ít nhất 6 ký tự'),
     ],
     validate,
-    register
+    UserController.register
 );
 
-router.post('/verify-email', verifyEmail);
+router.post('/verify-email', UserController.verifyEmail);
 
 router.post(
     '/login',
@@ -32,11 +33,12 @@ router.post(
         body('password').notEmpty().withMessage('Mật khẩu là bắt buộc'),
     ],
     validate,
-    login
+    UserController.login
 );
 
-router.post('/refresh-token', refreshToken);
+router.post('/refresh-token', UserController.refreshToken);
 
-router.post('/logout', logout);
+router.post('/logout', UserController.logout);
 
+router.get('/search', authenticateToken, UserController.searchUsers);
 export default router;
