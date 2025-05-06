@@ -99,7 +99,7 @@ const getBoardsByUser = async (req, res) => {
     const userId = req.user.id;
 
     try {
-        const listBoards = await BoardModel.getBoardsByUserId(userId);
+        const listBoards = await BoardModel.getAllBoardsByUserId(userId);
         res.json({ message: 'Lấy danh sách boards thành công', listBoards });
     } catch (err) {
         res.status(400).json({ message: err.message });

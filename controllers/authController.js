@@ -104,6 +104,7 @@ const login = async (req, res) => {
 
 const refreshToken = async (req, res) => {
     const { refreshToken } = req.cookies; // Lấy refresh token từ cookie
+    console.log('Refresh token:', refreshToken); // Kiểm tra giá trị refreshToken
 
     if (!refreshToken) {
         return res.status(403).json({ message: 'Thiếu refresh token' });
