@@ -1,6 +1,6 @@
 import pool from '../config/db.js';
 
-const createBoard = async ({ workspace_id, name, description, created_by }) => {
+const createBoard = async ({ workspace_id, name, description, created_by, cover_img }) => {
     const client = await pool.connect();
     try {
         await client.query('BEGIN');        
@@ -30,7 +30,7 @@ const createBoard = async ({ workspace_id, name, description, created_by }) => {
                 cover_img,
                 is_favorite
             )
-            VALUES ($1, $2, $3, $4, NULL, FALSE)
+            VALUES ($1, $2, $3, $4, $5, FALSE)
             RETURNING 
                 id,
                 workspace_id,
@@ -46,7 +46,9 @@ const createBoard = async ({ workspace_id, name, description, created_by }) => {
             workspace_id, 
             name, 
             description, 
-            created_by
+            created_by,
+            cover_img,
+            // is_favorite mặc định là false
         ]);
         const board = boardResult.rows[0];
 
@@ -189,14 +191,35 @@ const deleteBoard = async (boardId, userId) => {
     return result.rows[0];
 };
 
-const getBoardsByUserId = async (userId) => {
+const getAllBoardsByUserId = async (userId) => {
     const query = `
-        SELECT w.* , json_agg(DISTINCT b.*) as boards FROM workspaces w
+        SELECT w.id, w.name, w.description, w.owner_id, w.created_at,
+            COALESCE(
+                json_agg(
+                    jsonb_build_object(
+                        'id', b.id,
+                        'name', b.name,
+                        'description', b.description,
+                        'created_by', b.created_by,
+                        'created_at', b.created_at,
+                        'updated_at', b.updated_at,
+                        'cover_img', b.cover_img,
+                        'is_favorite', b.is_favorite
+                    ) ORDER BY b.created_at DESC
+                ) FILTER (WHERE b.id IS NOT NULL),
+                '[]'
+            ) as boards
+        FROM workspaces w
         JOIN workspace_members wm ON w.id = wm.workspace_id
-        JOIN boards b ON b.workspace_id = w.id
+        LEFT JOIN boards b ON b.workspace_id = w.id
         LEFT JOIN board_members bm ON b.id = bm.board_id AND bm.user_id = $1
         WHERE wm.user_id = $1
-        GROUP BY w.id
+        GROUP BY 
+            w.id, 
+            w.name, 
+            w.description, 
+            w.owner_id, 
+            w.created_at
     `;
     const result = await pool.query(query, [userId]);
     return result.rows;
@@ -243,7 +266,7 @@ export const BoardModel = {
     getBoardById,
     updateBoard,
     deleteBoard,
-    getBoardsByUserId,
+    getAllBoardsByUserId,
     getRecentlyViewedBoards,
     getAllWorkspacesByUserId,
     isBoardMember,
