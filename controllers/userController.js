@@ -1,6 +1,6 @@
 import bcrypt from 'bcrypt';
 import jwt from 'jsonwebtoken';
-import { createUser, findUserByEmail, verifyUser, findUserByToken, saveRefreshToken, findUserByRefreshToken, clearRefreshToken } from '../models/userModel.js';
+import { UserModel }  from '../models/userModel.js';
 import { sendVerificationEmail } from '../utils/email.js';
 import { env } from '../config/environment.js'
 import { HttpStatusCode } from '../utils/constants.js';
@@ -9,13 +9,13 @@ const register = async (req, res) => {
     const { username, email, password } = req.body;
 
     try {
-        const existingUser = await findUserByEmail(email);
+        const existingUser = await UserModel.findUserByEmail(email);
         if (existingUser) {
             return res.status(HttpStatusCode.OK).json({status: false, msg: 'Email đã được sử dụng' });
         }
 
         const verification_token = jwt.sign({ email }, env.JWT_SECRET, { expiresIn: '1h' });
-        const user = await createUser({ username, email, password, verification_token });
+        const user = await UserModel.createUser({ username, email, password, verification_token });
 
         await sendVerificationEmail(email, verification_token);
 
@@ -30,12 +30,12 @@ const verifyEmail = async (req, res) => {
     const { token } = req.body;
 
     try {
-        const user = await findUserByToken(token);
+        const user = await UserModel.findUserByToken(token);
         if (!user) {
             return res.status(HttpStatusCode.OK).json({status: false, message: 'Token không hợp lệ hoặc đã hết hạn' });
         }
 
-        const verifiedUser = await verifyUser(token);
+        const verifiedUser = await UserModel.verifyUser(token);
         if (!verifiedUser) {
             return res.status(HttpStatusCode.OK).json({status: false, message: 'Tài khoản đã được xác thực hoặc token không hợp lệ' });
         }
@@ -50,7 +50,7 @@ const login = async (req, res) => {
     const { email, password } = req.body;
 
     try {
-        const user = await findUserByEmail(email);
+        const user = await UserModel.findUserByEmail(email);
         if (!user) {
             return res.status(400).json({status: false, message: 'Email hoặc mật khẩu không đúng' });
         }
@@ -76,7 +76,7 @@ const login = async (req, res) => {
             { expiresIn: env.REFRESH_TOKEN_EXPIRES }
         );
 
-        await saveRefreshToken(user.id, refreshToken);
+        await UserModel.saveRefreshToken(user.id, refreshToken);
 
         // Trả về thêm thông tin user
         const userInfo = {
@@ -111,7 +111,7 @@ const refreshToken = async (req, res) => {
     }
 
     try {
-        const user = await findUserByRefreshToken(refreshToken);
+        const user = await UserModel.findUserByRefreshToken(refreshToken);
         if (!user) {
             return res.status(403).json({ message: 'Refresh token không hợp lệ' });
         }
@@ -142,13 +142,13 @@ const logout = async (req, res) => {
     }
 
     try {
-        const user = await findUserByRefreshToken(refreshToken);
+        const user = await UserModel.findUserByRefreshToken(refreshToken);
         if (!user) {
             return res.status(403).json({ message: 'Refresh token không hợp lệ' });
         }
 
         // Xóa refresh token trong database
-        await clearRefreshToken(user.id);
+        await UserModel.clearRefreshToken(user.id);
         res.clearCookie('refreshToken', { httpOnly: true, secure: false, sameSite: 'Strict' }); // Xóa cookie refresh token
         res.json({status: true, message: 'Đăng xuất thành công' });
     } catch (err) {
@@ -156,4 +156,29 @@ const logout = async (req, res) => {
     }
 };
 
-export { register, verifyEmail, login, refreshToken, logout };
+const searchUsers = async (req, res) => {
+    const { key } = req.query;
+
+    try {
+        if (!key || key.length < 1) {
+            return res.status(400).json({
+                status: false,
+                message: 'Vui lòng nhập ký tự để tìm kiếm'
+            });
+        }
+
+        const users = await UserModel.searchUser(key);
+        res.json({
+            status: true,
+            message: 'Tìm kiếm thành công',
+            users
+        });
+    } catch (err) {
+        res.status(400).json({
+            status: false,
+            message: err.message
+        });
+    }
+};
+
+export const UserController = {  register, verifyEmail, login, refreshToken, logout, searchUsers };

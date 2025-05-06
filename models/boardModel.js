@@ -73,7 +73,7 @@ const getBoardsByWorkspaceId = async (workspace_id, userId) => {
     // Lấy danh sách boards trong workspace
     const result = await pool.query(
         `
-        SELECT b.id, b.workspace_id, b.name, b.description, b.created_by, b.created_at
+        SELECT b.id, b.workspace_id, b.name, b.description, b.created_at, b.cover_img, b.is_favorite
         FROM boards b
         JOIN workspace_members wm ON b.workspace_id = wm.workspace_id
         WHERE b.workspace_id = $1 AND wm.user_id = $2
