@@ -117,6 +117,77 @@ const addMember = async (workspaceId, userId, invitedUserId, role = 'member') =>
     }
 };
 
+const addMembers = async (workspaceId, userId, invitedUserIds, role = 'member') => {
+    const client = await pool.connect();
+    try {
+        await client.query('BEGIN');
+
+        // Check inviter permission (owner or admin)
+        const permissionResult = await client.query(
+            'SELECT role FROM workspace_members WHERE workspace_id = $1 AND user_id = $2 AND role IN (\'owner\', \'admin\')',
+            [workspaceId, userId]
+        );
+        if (!permissionResult.rows[0]) {
+            throw new Error('Bạn không có quyền mời thành viên');
+        }
+
+        // Check if workspace exists
+        const workspaceResult = await client.query(
+            'SELECT name FROM workspaces WHERE id = $1',
+            [workspaceId]
+        );
+        if (!workspaceResult.rows[0]) {
+            throw new Error('Workspace không tồn tại');
+        }
+        const workspaceName = workspaceResult.rows[0].name;
+
+        // Check if all invited users exist
+        const userIds = Array.isArray(invitedUserIds) ? invitedUserIds : [invitedUserIds];
+        const usersResult = await client.query(
+            'SELECT id, username FROM users WHERE id = ANY($1)',
+            [userIds]
+        );
+        if (usersResult.rows.length !== userIds.length) {
+            throw new Error('Một số người dùng không tồn tại');
+        }
+
+        // Insert multiple members
+        const values = userIds.map((_, index) => 
+            `($1, $${index + 2}, $${userIds.length + 2})`
+        ).join(',');
+
+        const params = [workspaceId, ...userIds, role];
+
+        const result = await client.query(
+            `INSERT INTO workspace_members (workspace_id, user_id, role)
+             VALUES ${values}
+             ON CONFLICT (workspace_id, user_id) DO NOTHING
+             RETURNING *`,
+            params
+        );
+
+        // Get member details with user information
+        const membersResult = await client.query(
+            `SELECT wm.*, u.username, u.email 
+             FROM workspace_members wm
+             JOIN users u ON wm.user_id = u.id
+             WHERE wm.id = ANY($1)`,
+            [result.rows.map(r => r.id)]
+        );
+
+        await client.query('COMMIT');
+        return {
+            addedMembers: membersResult.rows,
+            workspaceName
+        };
+    } catch (err) {
+        await client.query('ROLLBACK');
+        throw err;
+    } finally {
+        client.release();
+    }
+};
+
 const removeMember = async (workspaceId, userId, memberId) => {
     const client = await pool.connect();
     try {
@@ -218,6 +289,7 @@ export const WorkspaceModel =  {
     updateWorkspace,
     deleteWorkspace,
     addMember,
+    addMembers,
     removeMember,
     getMembers,
     updateMemberRole,

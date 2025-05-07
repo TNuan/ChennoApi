@@ -1,4 +1,5 @@
 import { WorkspaceModel } from '../models/workspaceModel.js';
+import { NotificationModel } from '../models/notificationModel.js';
 
 const create = async (req, res) => {
     const { name, description } = req.body;
@@ -85,6 +86,45 @@ const inviteMember = async (req, res) => {
     }
 };
 
+const inviteMembers = async (req, res) => {
+    const { id } = req.params; // workspaceId
+    const { userIds, role } = req.body; // single userId or array of userIds
+    const inviterId = req.user.id;
+
+    try {
+        if (!userIds || (Array.isArray(userIds) && userIds.length === 0)) {
+            return res.status(400).json({ 
+                status: false,
+                message: 'Vui lòng chọn ít nhất một thành viên' 
+            });
+        }
+
+        const result = await WorkspaceModel.addMembers(id, inviterId, userIds, role);
+        
+        // Create notifications for invited members
+        const notifications = await NotificationModel.createBulkNotifications({
+            sender_id: inviterId,
+            receiver_ids: Array.isArray(userIds) ? userIds : [userIds],
+            title: 'Lời mời tham gia workspace',
+            content: `Bạn đã được thêm vào workspace "${result.workspaceName}"`,
+            type: 'workspace_invitation',
+            entity_type: 'workspace',
+            entity_id: id
+        });
+
+        res.json({ 
+            status: true,
+            message: 'Mời thành viên thành công', 
+            members: result.addedMembers 
+        });
+    } catch (err) {
+        res.status(400).json({ 
+            status: false,
+            message: err.message 
+        });
+    }
+};
+
 const removeMember = async (req, res) => {
     const { id, userId } = req.params; // id: workspaceId, userId: người bị xóa
     const removerId = req.user.id;
@@ -138,6 +178,7 @@ export const WorkspaceController =  {
     update,
     remove,
     inviteMember,
+    inviteMembers,
     removeMember,
     getMembersList,
     updateMember

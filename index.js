@@ -6,6 +6,7 @@ import workspaceRoutes from './routes/workspaceRoutes.js';
 import boardRoutes from './routes/boardRoutes.js';
 import columnRoutes from './routes/columnRoutes.js';
 import cardRoutes from './routes/cardRoutes.js';
+import notificationRoutes from './routes/notificationRoutes.js';
 import cookieParser from 'cookie-parser';
 
 dotenv.config();
@@ -16,7 +17,7 @@ const port = 3000;
 app.use(cors({
     origin: 'http://localhost:3001', // Your React app's URL
     credentials: true, // Allow credentials (cookies)
-    methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+    methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
     allowedHeaders: ['Content-Type', 'Authorization', 'Accept']
 }));
 
@@ -27,6 +28,7 @@ app.use('/api/workspaces', workspaceRoutes);
 app.use('/api/boards', boardRoutes);
 app.use('/api/columns', columnRoutes);
 app.use('/api/cards', cardRoutes);
+app.use('/api/notifications', notificationRoutes);
 
 app.listen(port, () => {
   console.log(`Server chạy tại http://localhost:${port}`);
