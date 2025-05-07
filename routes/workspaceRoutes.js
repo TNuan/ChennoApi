@@ -50,6 +50,18 @@ router.post(
     WorkspaceController.inviteMember
 );
 
+router.post(
+    '/:id/bulk-invite',
+    authenticateToken,
+    [
+        body('userIds').isArray().withMessage('userIds phải là một mảng'),
+        body('userIds.*').isInt().withMessage('Tất cả ID người dùng phải là số'),
+        body('role').optional().isIn(['admin', 'member']).withMessage('Vai trò phải là admin hoặc member'),
+    ],
+    validate,
+    WorkspaceController.inviteMembers
+);
+
 router.delete('/:id/members/:userId', authenticateToken, WorkspaceController.removeMember);
 
 router.get('/:id/members', authenticateToken, WorkspaceController.getMembersList);
