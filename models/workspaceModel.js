@@ -31,7 +31,7 @@ const createWorkspace = async ({ name, description, owner_id }) => {
 const getWorkspacesByUserId = async (userId) => {
     const result = await pool.query(
         `
-        SELECT w.id, w.name, w.description, w.owner_id, w.created_at
+        SELECT w.id, w.name, w.description, w.owner_id, w.created_at, wm.role
         FROM workspaces w
         JOIN workspace_members wm ON w.id = wm.workspace_id
         WHERE wm.user_id = $1
