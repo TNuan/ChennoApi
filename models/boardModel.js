@@ -75,7 +75,7 @@ const getBoardsByWorkspaceId = async (workspace_id, userId) => {
         `
         SELECT b.id, b.workspace_id, b.name, b.description, b.created_at, b.cover_img, bm.is_favorite
         FROM boards b
-        JOIN board_members bm ON b.id = bm.board_id
+        LEFT JOIN board_members bm ON b.id = bm.board_id AND bm.user_id = $2
         JOIN workspace_members wm ON b.workspace_id = wm.workspace_id
         WHERE b.workspace_id = $1 AND wm.user_id = $2 AND (b.visibility = 1 OR bm.user_id = $2)
         `,
@@ -185,7 +185,6 @@ const toggleFavoriteBoard = async (boardId, userId) => {
         RETURNING is_favorite
     `;
     const result = await pool.query(query, [boardId, userId]);
-    console.log('ádf',result.rows[0]);
     return result.rows[0];
 }
 
