@@ -80,6 +80,25 @@ const update = async (req, res) => {
     }
 };
 
+const toggleFavoriteBoard = async (req, res) => {
+    const { board_id } = req.params;
+    const userId = req.user.id;
+    console.log('userId', userId);
+    console.log('board_id', typeof(board_id));
+    try {
+        const board = await BoardModel.toggleFavoriteBoard(board_id, userId);
+        if (!board) {
+            return res.status(403).json({ message: 'Board không tồn tại hoặc bạn không có quyền cập nhật' });
+        }
+        res.json({ 
+            message: 'Cập nhật trạng thái yêu thích board thành công', 
+            is_favorite: board.is_favorite 
+        });
+    } catch (err) {
+        res.status(400).json({ message: err.message });
+    }
+};
+    
 const remove = async (req, res) => {
     const { id } = req.params;
     const userId = req.user.id;
@@ -113,12 +132,22 @@ const getRecentlyViewedBoards = async (req, res) => {
 
     try {
         const boards = await BoardModel.getRecentlyViewedBoards(userId, limit);
-        console.log('boards', boards);
         res.json({ message: 'Lấy danh sách boards gần đây thành công', boards });
     } catch (err) {
         res.status(400).json({ message: err.message });
     }
 };
+
+const getFavoriteBoards = async (req, res) => {
+    const userId = req.user.id;
+
+    try {
+        const boards = await BoardModel.getFavoriteBoards(userId);
+        res.json({ message: 'Lấy danh sách boards yêu thích thành công', boards });
+    } catch (err) {
+        res.status(400).json({ message: err.message });
+    }
+}
 
 const getAllWorkspaces = async (req, res) => {
     const userId = req.user.id;
@@ -163,6 +192,8 @@ export const BoardController = {
     remove,
     getBoardsByUser,
     getRecentlyViewedBoards,
+    toggleFavoriteBoard,
+    getFavoriteBoards,
     getAllWorkspaces,
     addMember
 };
