@@ -14,8 +14,7 @@ const create = async (req, res) => {
             name, 
             description: description || null, 
             created_by,
-            cover_img: cover_img || null,
-            is_favorite: false
+            cover_img: cover_img || null
         });
 
         res.status(201).json({ status: true,message: 'Tạo board thành công', board });
@@ -59,11 +58,11 @@ const getById = async (req, res) => {
 
 const update = async (req, res) => {
     const { id } = req.params;
-    const { workspace_id, name, description, cover_img, is_favorite } = req.body;
+    const { workspace_id, name, description, cover_img } = req.body;
     const userId = req.user.id;
 
     try {
-        const board = await BoardModel.updateBoard(id, userId, { workspace_id, name, description, cover_img, is_favorite });
+        const board = await BoardModel.updateBoard(id, userId, { workspace_id, name, description, cover_img });
 
         if (!board) {
             return res.status(403).json({ 
@@ -83,8 +82,7 @@ const update = async (req, res) => {
 const toggleFavoriteBoard = async (req, res) => {
     const { board_id } = req.params;
     const userId = req.user.id;
-    console.log('userId', userId);
-    console.log('board_id', typeof(board_id));
+
     try {
         const board = await BoardModel.toggleFavoriteBoard(board_id, userId);
         if (!board) {
