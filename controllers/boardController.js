@@ -2,6 +2,7 @@ import { BoardModel } from '../models/boardModel.js';
 import { socketIO } from '../index.js';
 import { emitBoardChange, notifyUser } from '../services/socketService.js';
 import { ColumnModel } from '../models/columnModel.js';
+import { NotificationService } from '../services/notificationService.js';
 
 const create = async (req, res) => {
     const { workspace_id, name, description, cover_img } = req.body;
@@ -194,13 +195,15 @@ const addMember = async (req, res) => {
         // Lấy thông tin board để thông báo
         const board = await BoardModel.getBoardById(board_id, requestUserId);
         
-        // Thông báo cho thành viên mới được thêm vào
-        notifyUser(socketIO, user_id, 'board_invitation', {
-            board_id,
-            board_name: board.name,
-            inviter_id: requestUserId,
-            inviter_name: req.user.username,
-            role
+        // Tạo thông báo và gửi qua socket
+        await NotificationService.createAndSendNotification({
+            sender_id: requestUserId,
+            receiver_id: user_id,
+            title: 'Lời mời tham gia board mới',
+            content: `Bạn đã được thêm vào board "${board.name}" với vai trò ${role}`,
+            type: 'board_invitation',
+            entity_type: 'board',
+            entity_id: board_id
         });
         
         // Thông báo cho tất cả thành viên hiện tại về thành viên mới

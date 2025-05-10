@@ -64,6 +64,10 @@ io.on('connection', (socket) => {
     // Lưu socket theo userId
     userSockets.set(socket.user.id, socket.id);
     
+    // Thêm xử lý cho thông báo
+    // Khi user kết nối, tự động join vào room riêng của họ để nhận thông báo
+    socket.join(`user:${socket.user.id}`);
+    
     // Xử lý tham gia board
     socket.on('join_board', ({ boardId }) => {
         console.log(`User ${socket.user.id} joined board ${boardId}`);
@@ -186,9 +190,14 @@ function emitOnlineUsers(boardId) {
     });
 }
 
+// Hàm helper để gửi thông báo đến một user
+function emitNotification(userId, notification) {
+    io.to(`user:${userId}`).emit('new_notification', notification);
+}
+
 // Export socket.io để có thể sử dụng ở các phần khác của ứng dụng
 export const socketIO = io;
-export { emitOnlineUsers };  // Export để có thể sử dụng ở các services khác
+export { emitOnlineUsers, emitNotification };  // Export để có thể sử dụng ở các services khác
 
 // Các route của API
 app.use('/api/users', userRoutes);
