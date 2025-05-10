@@ -1,11 +1,13 @@
 import { ColumnModel } from '../models/columnModel.js';
 
 const create = async (req, res) => {
-    const { board_id, name, position } = req.body;
+    const { board_id, title } = req.body;
+    console.log('board_id', board_id);
+    console.log('title', title);
     const created_by = req.user.id;
 
     try {
-        const column = await ColumnModel.createColumn({ board_id, name, position, created_by });
+        const column = await ColumnModel.createColumn({ board_id, title, created_by });
         res.status(201).json({ message: 'Tạo column thành công', column });
     } catch (err) {
         res.status(400).json({ message: err.message });
@@ -41,11 +43,11 @@ const getById = async (req, res) => {
 
 const update = async (req, res) => {
     const { id } = req.params;
-    const { name, position } = req.body;
+    const { title, position } = req.body;
     const userId = req.user.id;
 
     try {
-        const column = await ColumnModel.updateColumn(id, userId, { name, position });
+        const column = await ColumnModel.updateColumn(id, userId, { title, position });
         if (!column) {
             return res.status(403).json({ message: 'Column không tồn tại hoặc bạn không có quyền cập nhật' });
         }

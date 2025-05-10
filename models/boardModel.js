@@ -22,8 +22,8 @@ const createBoard = async ({ workspace_id, name, description, created_by, cover_
         }
 
         const boardQuery = `
-            INSERT INTO boards (workspace_id, name, description, created_by,cover_img)
-            VALUES ($1, $2, $3, $4, $5, FALSE)
+            INSERT INTO boards (workspace_id, name, description, created_by, cover_img)
+            VALUES ($1, $2, $3, $4, $5)
             RETURNING id, workspace_id, name, description, created_by, created_at, updated_at, cover_img
         `;
         const boardResult = await client.query(boardQuery, [
@@ -78,6 +78,18 @@ const isBoardMember = async (boardId, userId) => {
     return result.rows.length > 0;
 };
 
+const isAccessibleBoard = async (boardId, userId) => {
+    const query = `
+        SELECT b.* FROM boards b
+        LEFT JOIN workspace_members wm ON b.workspace_id = wm.workspace_id
+        LEFT JOIN board_members bm ON b.id = bm.board_id
+        WHERE b.id = $1 AND wm.user_id = $2
+        AND (b.visibility = 1 OR bm.user_id = $2)
+    `;
+    const result = await pool.query(query, [boardId, userId]);
+    return result.rows.length > 0;
+}
+
 const addBoardMember = async (boardId, userId, role) => {
     const query = `
         INSERT INTO board_members (board_id, user_id, role)
@@ -90,20 +102,24 @@ const addBoardMember = async (boardId, userId, role) => {
 
 const getBoardById = async (id, userId) => {
     // Kiểm tra quyền truy cập trước khi lấy board
-    const isMember = await isBoardMember(id, userId);
-    if (!isMember) {
-        return null;
+    const isAccessible = await isAccessibleBoard(id, userId);
+    if (!isAccessible) {
+        throw new Error('Bạn không có quyền xem thành viên');
     }
 
     const query = `
-        SELECT b.*, 
-               json_agg(DISTINCT bm.*) as members
+        SELECT 
+            b.*, 
+            (bf.id IS NOT NULL) as is_favorite,
+            (SELECT bm.role FROM board_members bm WHERE bm.board_id = b.id AND bm.user_id = $2) as user_role,
+            json_agg(DISTINCT bm.*) as members
         FROM boards b
         LEFT JOIN board_members bm ON b.id = bm.board_id
+        LEFT JOIN board_favorites bf ON b.id = bf.board_id AND bf.user_id = $2
         WHERE b.id = $1
-        GROUP BY b.id
+        GROUP BY b.id, bf.id
     `;
-    const result = await pool.query(query, [id]);
+    const result = await pool.query(query, [id, userId]);
     return result.rows[0];
 };
 

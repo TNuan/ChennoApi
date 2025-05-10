@@ -18,7 +18,7 @@ router.post(
     authenticateToken,
     [
         body('board_id').isInt().withMessage('Board ID phải là số'),
-        body('name').notEmpty().withMessage('Tên column là bắt buộc'),
+        body('title').notEmpty().withMessage('Tên column là bắt buộc'),
         body('position').optional().isInt().withMessage('Position phải là số'),
     ],
     validate,
@@ -33,7 +33,7 @@ router.put(
     '/:id',
     authenticateToken,
     [
-        body('name').notEmpty().withMessage('Tên column là bắt buộc'),
+        body('title').notEmpty().withMessage('Tên column là bắt buộc'),
         body('position').optional().isInt().withMessage('Position phải là số'),
     ],
     validate,
