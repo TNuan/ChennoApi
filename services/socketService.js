@@ -1,3 +1,6 @@
+// Thêm vào đầu file
+import pool from '../config/db.js';
+
 // Socket service giúp gửi thông báo qua socket từ các controller
 
 /**
@@ -93,4 +96,64 @@ export const sendOnlineUsers = (io, boardId) => {
     import('../index.js').then(module => {
         module.emitOnlineUsers(boardId);
     });
+};
+
+/**
+ * Gửi thông báo mới đến người dùng
+ * @param {object} io - Instance Socket.IO
+ * @param {string} userId - ID của người dùng nhận thông báo
+ * @param {object} notification - Đối tượng thông báo
+ */
+export const sendNotification = (io, userId, notification) => {
+    // Sử dụng hàm đã được export từ index.js
+    import('../index.js').then(module => {
+        module.emitNotification(userId, notification);
+    });
+};
+
+/**
+ * Gửi cập nhật số lượng thông báo chưa đọc
+ * @param {object} io - Instance Socket.IO
+ * @param {string} userId - ID của người dùng
+ * @param {number} count - Số lượng thông báo chưa đọc
+ */
+export const sendUnreadCount = (io, userId, count) => {
+    notifyUser(io, userId, 'unread_count', { count });
+};
+
+/**
+ * Gửi thông báo thay đổi workspace đến tất cả thành viên
+ * @param {object} io - Instance Socket.IO
+ * @param {string} workspaceId - ID của workspace
+ * @param {string} changeType - Loại thay đổi (add_member, remove_member, update_member, etc)
+ * @param {object} payload - Dữ liệu thay đổi
+ * @param {string} excludeUserId - ID của người dùng sẽ không nhận thông báo (thường là người thực hiện thay đổi)
+ */
+export const emitWorkspaceChange = async (io, workspaceId, changeType, payload, excludeUserId) => {
+    try {
+        // Lấy danh sách thành viên workspace
+        const memberQuery = `
+            SELECT user_id 
+            FROM workspace_members 
+            WHERE workspace_id = $1
+        `;
+        const client = await pool.connect();
+        const memberResult = await client.query(memberQuery, [workspaceId]);
+        client.release();
+        
+        const members = memberResult.rows;
+        
+        // Gửi thông báo đến từng thành viên (trừ người gửi)
+        members.forEach(member => {
+            if (member.user_id !== excludeUserId) {
+                notifyUser(io, member.user_id, 'workspace_updated', {
+                    changeType,
+                    payload,
+                    workspaceId
+                });
+            }
+        });
+    } catch (error) {
+        console.error('Error emitting workspace change:', error);
+    }
 };
