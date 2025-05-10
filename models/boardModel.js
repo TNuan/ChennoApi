@@ -119,6 +119,8 @@ const getBoardById = async (id, userId) => {
         WHERE b.id = $1
         GROUP BY b.id, bf.id
     `;
+
+    
     const result = await pool.query(query, [id, userId]);
     return result.rows[0];
 };

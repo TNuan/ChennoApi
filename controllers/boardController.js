@@ -1,4 +1,7 @@
 import { BoardModel } from '../models/boardModel.js';
+import { socketIO } from '../index.js';
+import { emitBoardChange, notifyUser } from '../services/socketService.js';
+import { ColumnModel } from '../models/columnModel.js';
 
 const create = async (req, res) => {
     const { workspace_id, name, description, cover_img } = req.body;
@@ -17,7 +20,10 @@ const create = async (req, res) => {
             cover_img: cover_img || null
         });
 
-        res.status(201).json({ status: true,message: 'Tạo board thành công', board });
+        // Thông báo cho các thành viên workspace về board mới
+        emitBoardChange(socketIO, workspace_id, 'add_board', board, created_by);
+
+        res.status(201).json({ status: true, message: 'Tạo board thành công', board });
     } catch (err) {
         res.status(400).json({ status: false, message: err.message });
     }
@@ -46,9 +52,13 @@ const getById = async (req, res) => {
                 message: 'Bạn không có quyền truy cập board này' 
             });
         }
-
+        board.columns = await ColumnModel.getColumnsByBoardId(id, userId) || [];
+         
         // Cập nhật board_views
         await BoardModel.updateBoardView(id, userId);
+        
+        // Không cần thiết gọi emitOnlineUsers ở đây vì frontend sẽ gọi
+        // join_board khi vào board, và hàm đó đã xử lý việc gửi danh sách
         
         res.json({ message: 'Lấy board thành công', board });
     } catch (err) {
@@ -69,6 +79,9 @@ const update = async (req, res) => {
                 message: 'Board không tồn tại hoặc bạn không có quyền cập nhật' 
             });
         }
+
+        // Thông báo cập nhật board cho tất cả thành viên
+        emitBoardChange(socketIO, id, 'update_board', board, userId);
 
         res.json({ 
             message: 'Cập nhật board thành công', 
@@ -106,6 +119,10 @@ const remove = async (req, res) => {
         if (!board) {
             return res.status(403).json({ message: 'Board không tồn tại hoặc bạn không có quyền xóa' });
         }
+
+        // Thông báo xóa board cho tất cả thành viên
+        emitBoardChange(socketIO, id, 'delete_board', { id }, userId);
+
         res.json({ message: 'Xóa board thành công' });
     } catch (err) {
         res.status(400).json({ message: err.message });
@@ -173,6 +190,27 @@ const addMember = async (req, res) => {
         }
 
         const member = await BoardModel.addBoardMember(board_id, user_id, role);
+        
+        // Lấy thông tin board để thông báo
+        const board = await BoardModel.getBoardById(board_id, requestUserId);
+        
+        // Thông báo cho thành viên mới được thêm vào
+        notifyUser(socketIO, user_id, 'board_invitation', {
+            board_id,
+            board_name: board.name,
+            inviter_id: requestUserId,
+            inviter_name: req.user.username,
+            role
+        });
+        
+        // Thông báo cho tất cả thành viên hiện tại về thành viên mới
+        emitBoardChange(socketIO, board_id, 'add_member', {
+            board_id,
+            user_id,
+            role,
+            added_by: requestUserId
+        }, requestUserId);
+        
         res.json({ 
             message: 'Thêm thành viên vào board thành công', 
             member 
