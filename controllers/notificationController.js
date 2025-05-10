@@ -1,5 +1,7 @@
 import { NotificationModel } from '../models/notificationModel.js';
 import { HttpStatusCode } from '../utils/constants.js';
+import { socketIO } from '../index.js';
+import { sendNotification, sendUnreadCount } from '../services/socketService.js';
 
 const getNotifications = async (req, res) => {
     console.log('getNotifications called with userId:', req.user.id);
@@ -14,6 +16,9 @@ const getNotifications = async (req, res) => {
         });
 
         const unreadCount = await NotificationModel.getUnreadCount(userId);
+
+        // Gửi số lượng thông báo chưa đọc qua socket
+        sendUnreadCount(socketIO, userId, unreadCount);
 
         res.json({
             status: true,
@@ -42,6 +47,10 @@ const markAsRead = async (req, res) => {
             });
         }
 
+        // Cập nhật số lượng thông báo chưa đọc
+        const unreadCount = await NotificationModel.getUnreadCount(userId);
+        sendUnreadCount(socketIO, userId, unreadCount);
+
         res.status(HttpStatusCode.OK).json({
             status: true,
             message: 'Đánh dấu đã đọc thành công',
@@ -60,6 +69,10 @@ const markAllAsRead = async (req, res) => {
 
     try {
         await NotificationModel.markAllAsRead(userId);
+        
+        // Cập nhật số lượng thông báo chưa đọc (sẽ là 0)
+        sendUnreadCount(socketIO, userId, 0);
+
         res.json({
             status: true,
             message: 'Đánh dấu tất cả đã đọc thành công'
@@ -93,6 +106,13 @@ const createNotification = async (req, res) => {
             entity_type,
             entity_id
         });
+
+        // Gửi thông báo qua socket
+        sendNotification(socketIO, receiver_id, notification);
+        
+        // Cập nhật số lượng thông báo chưa đọc
+        const unreadCount = await NotificationModel.getUnreadCount(receiver_id);
+        sendUnreadCount(socketIO, receiver_id, unreadCount);
 
         res.status(201).json({
             status: true,
@@ -136,6 +156,15 @@ const createBulkNotifications = async (req, res) => {
             entity_type,
             entity_id
         });
+
+        // Gửi thông báo và cập nhật số lượng thông báo chưa đọc cho từng người nhận
+        for (const notification of notifications) {
+            sendNotification(socketIO, notification.receiver.id, notification);
+            
+            // Cập nhật số lượng thông báo chưa đọc
+            const unreadCount = await NotificationModel.getUnreadCount(notification.receiver.id);
+            sendUnreadCount(socketIO, notification.receiver.id, unreadCount);
+        }
 
         res.status(201).json({
             status: true,

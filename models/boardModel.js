@@ -22,25 +22,9 @@ const createBoard = async ({ workspace_id, name, description, created_by, cover_
         }
 
         const boardQuery = `
-            INSERT INTO boards (
-                workspace_id, 
-                name, 
-                description, 
-                created_by,
-                cover_img,
-                is_favorite
-            )
-            VALUES ($1, $2, $3, $4, $5, FALSE)
-            RETURNING 
-                id,
-                workspace_id,
-                name,
-                description,
-                created_by,
-                created_at,
-                updated_at,
-                cover_img,
-                is_favorite
+            INSERT INTO boards (workspace_id, name, description, created_by, cover_img)
+            VALUES ($1, $2, $3, $4, $5)
+            RETURNING id, workspace_id, name, description, created_by, created_at, updated_at, cover_img
         `;
         const boardResult = await client.query(boardQuery, [
             workspace_id, 
@@ -73,9 +57,10 @@ const getBoardsByWorkspaceId = async (workspace_id, userId) => {
     // Lấy danh sách boards trong workspace
     const result = await pool.query(
         `
-        SELECT b.id, b.workspace_id, b.name, b.description, b.created_at, b.cover_img, bm.is_favorite
+        SELECT b.id, b.workspace_id, b.name, b.description, b.created_at, b.cover_img, (bf.id IS NOT NULL) as is_favorite
         FROM boards b
         LEFT JOIN board_members bm ON b.id = bm.board_id AND bm.user_id = $2
+        LEFT JOIN board_favorites bf ON b.id = bf.board_id AND bf.user_id = $2
         JOIN workspace_members wm ON b.workspace_id = wm.workspace_id
         WHERE b.workspace_id = $1 AND wm.user_id = $2 AND (b.visibility = 1 OR bm.user_id = $2)
         `,
@@ -93,6 +78,18 @@ const isBoardMember = async (boardId, userId) => {
     return result.rows.length > 0;
 };
 
+const isAccessibleBoard = async (boardId, userId) => {
+    const query = `
+        SELECT b.* FROM boards b
+        LEFT JOIN workspace_members wm ON b.workspace_id = wm.workspace_id
+        LEFT JOIN board_members bm ON b.id = bm.board_id
+        WHERE b.id = $1 AND wm.user_id = $2
+        AND (b.visibility = 1 OR bm.user_id = $2)
+    `;
+    const result = await pool.query(query, [boardId, userId]);
+    return result.rows.length > 0;
+}
+
 const addBoardMember = async (boardId, userId, role) => {
     const query = `
         INSERT INTO board_members (board_id, user_id, role)
@@ -105,20 +102,26 @@ const addBoardMember = async (boardId, userId, role) => {
 
 const getBoardById = async (id, userId) => {
     // Kiểm tra quyền truy cập trước khi lấy board
-    const isMember = await isBoardMember(id, userId);
-    if (!isMember) {
-        return null;
+    const isAccessible = await isAccessibleBoard(id, userId);
+    if (!isAccessible) {
+        throw new Error('Bạn không có quyền xem thành viên');
     }
 
     const query = `
-        SELECT b.*, 
-               json_agg(DISTINCT bm.*) as members
+        SELECT 
+            b.*, 
+            (bf.id IS NOT NULL) as is_favorite,
+            (SELECT bm.role FROM board_members bm WHERE bm.board_id = b.id AND bm.user_id = $2) as user_role,
+            json_agg(DISTINCT bm.*) as members
         FROM boards b
         LEFT JOIN board_members bm ON b.id = bm.board_id
+        LEFT JOIN board_favorites bf ON b.id = bf.board_id AND bf.user_id = $2
         WHERE b.id = $1
-        GROUP BY b.id
+        GROUP BY b.id, bf.id
     `;
-    const result = await pool.query(query, [id]);
+
+    
+    const result = await pool.query(query, [id, userId]);
     return result.rows[0];
 };
 
@@ -178,15 +181,37 @@ const updateBoard = async (boardId, userId, { workspace_id, name, description, c
 };
 
 const toggleFavoriteBoard = async (boardId, userId) => {
-    const query = `
-        UPDATE board_members
-        SET is_favorite = NOT is_favorite
-        WHERE board_id = $1 AND user_id = $2
-        RETURNING is_favorite
-    `;
-    const result = await pool.query(query, [boardId, userId]);
-    return result.rows[0];
-}
+    const client = await pool.connect();
+    try {
+        await client.query('BEGIN');
+
+        const boardCheck = await client.query(`SELECT 1 FROM boards WHERE id = $1`, [boardId]);
+        if (!boardCheck.rows[0]) {
+            throw new Error('Board không tồn tại');
+        }
+
+        const favoriteCheck = await client.query(`SELECT id FROM board_favorites WHERE board_id = $1 AND user_id = $2`, [boardId, userId]);
+
+        let result;
+        if (favoriteCheck.rows[0]) {
+            result = await client.query(
+                `DELETE FROM board_favorites WHERE board_id = $1 AND user_id = $2 RETURNING false as is_favorite`, [boardId, userId]
+            );
+        } else {
+            result = await client.query(
+                `INSERT INTO board_favorites (board_id, user_id) VALUES ($1, $2) RETURNING true as is_favorite`, [boardId, userId]
+            );
+        }
+
+        await client.query('COMMIT');
+        return result.rows[0];
+    } catch (error) {
+        await client.query('ROLLBACK');
+        throw error;
+    } finally {
+        client.release();
+    }
+};
 
 const deleteBoard = async (boardId, userId) => {
     const result = await pool.query(
@@ -214,7 +239,7 @@ const getAllBoardsByUserId = async (userId) => {
                         'created_at', b.created_at,
                         'updated_at', b.updated_at,
                         'cover_img', b.cover_img,
-                        'is_favorite', bm.is_favorite,
+                        'is_favorite', (bf.id IS NOT NULL),
                         'viewed_at', bv.viewed_at
                     ) ORDER BY b.created_at DESC
                 ) FILTER (WHERE b.id IS NOT NULL AND (b.visibility = 1 OR bm.user_id = $1)),
@@ -225,6 +250,7 @@ const getAllBoardsByUserId = async (userId) => {
         LEFT JOIN boards b ON b.workspace_id = w.id
         LEFT JOIN board_members bm ON b.id = bm.board_id AND bm.user_id = $1
         LEFT JOIN board_views bv ON b.id = bv.board_id AND bv.user_id = $1
+        LEFT JOIN board_favorites bf ON b.id = bf.board_id AND bf.user_id = $1
         WHERE wm.user_id = $1
         GROUP BY 
             w.id, 
@@ -254,14 +280,23 @@ const getRecentlyViewedBoards = async (userId, limit) => {
 
 const getFavoriteBoards = async (userId) => {
     const query = `
-        SELECT b.*, bm.is_favorite FROM boards b
-        JOIN board_members bm ON b.id = bm.board_id
-        WHERE bm.user_id = $1 AND bm.is_favorite = TRUE
-        ORDER BY b.created_at DESC
+        SELECT 
+            b.*,
+            true as is_favorite,
+            bf.created_at as favorited_at,
+            CASE 
+                WHEN bm.user_id IS NOT NULL THEN true 
+                ELSE false 
+            END as is_member
+        FROM boards b
+        JOIN board_favorites bf ON b.id = bf.board_id
+        LEFT JOIN board_members bm ON b.id = bm.board_id AND bm.user_id = $1
+        WHERE bf.user_id = $1
+        ORDER BY bf.created_at DESC
     `;
     const result = await pool.query(query, [userId]);
     return result.rows;
-}
+};
 
 const getAllWorkspacesByUserId = async (userId) => {
     const query = `
