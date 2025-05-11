@@ -12,11 +12,25 @@ import pool from '../config/db.js';
  * @param {string} excludeUserId - ID của người dùng sẽ không nhận thông báo (thường là người thực hiện thay đổi)
  */
 export const emitBoardChange = (io, boardId, changeType, payload, excludeUserId) => {
-    io.to(`board:${boardId}`).emit('board_updated', {
-        changeType,
-        payload,
-        senderId: excludeUserId
-    });
+    const excludeSocketId = getUserSocketId(io, excludeUserId);
+    
+    // Chỉ gửi đến các socket khác, không gửi đến người thay đổi
+    if (excludeSocketId) {
+        // Sử dụng socket.to() thay vì io.to() để loại trừ người gửi
+        io.in(`board:${boardId}`).except(excludeSocketId).emit('board_updated', {
+            changeType,
+            payload,
+            senderId: excludeUserId,
+            senderSocketId: excludeSocketId
+        });
+    } else {
+        // Nếu không tìm thấy socket ID, gửi cho tất cả (nhưng trường hợp này hiếm khi xảy ra)
+        io.to(`board:${boardId}`).emit('board_updated', {
+            changeType,
+            payload,
+            senderId: excludeUserId
+        });
+    }
 };
 
 /**
@@ -72,16 +86,23 @@ export const getUsersInBoard = (io, boardId) => {
     if (!room) return [];
     
     const users = [];
+    const seenUserIds = new Set(); // To prevent duplicates
+    
     room.forEach(socketId => {
         const socket = io.sockets.sockets.get(socketId);
-        if (socket && socket.user) {
+        if (socket && socket.user && !seenUserIds.has(socket.user.id)) {
+            seenUserIds.add(socket.user.id);
+            // Include more complete user information
             users.push({
                 id: socket.user.id,
-                username: socket.user.username
+                name: socket.user.name || socket.user.username,
+                email: socket.user.email,
+                avatar: socket.user.avatar
             });
         }
     });
     
+    console.log(`Users in board ${boardId}:`, users);
     return users;
 };
 
@@ -91,10 +112,11 @@ export const getUsersInBoard = (io, boardId) => {
  * @param {string} boardId - ID của board
  */
 export const sendOnlineUsers = (io, boardId) => {
-    // Sử dụng hàm đã được export từ index.js
-    // Sử dụng dynamic import vì có thể có circular dependency
-    import('../index.js').then(module => {
-        module.emitOnlineUsers(boardId);
+    const onlineUsers = getUsersInBoard(io, boardId);
+    console.log('Online users in boardưedsd:', onlineUsers);
+    io.to(`board:${boardId}`).emit('online_users', {
+        boardId,
+        users: onlineUsers
     });
 };
 

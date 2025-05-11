@@ -57,10 +57,12 @@ const update = async (req, res) => {
         }
 
         // Thông báo thay đổi cho tất cả người dùng trong board
-        emitBoardChange(socketIO, column.board_id, 'update_column', column, userId);
-        if (position) {
+        // emitBoardChange(socketIO, column.board_id, 'update_column', column, userId);
+        if (position !== undefined) { // Nếu có thay đổi vị trí
             const columns = await ColumnModel.getColumnsByBoardId(column.board_id, userId);
             emitBoardChange(socketIO, column.board_id, 'column_order', columns, userId);
+        } else { // Nếu chỉ cập nhật title
+            emitBoardChange(socketIO, column.board_id, 'column_update', column, userId);
         }
 
         res.json({ message: 'Cập nhật column thành công', column });
