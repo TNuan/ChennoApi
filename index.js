@@ -11,6 +11,7 @@ import columnRoutes from './routes/columnRoutes.js';
 import cardRoutes from './routes/cardRoutes.js';
 import notificationRoutes from './routes/notificationRoutes.js';
 import cookieParser from 'cookie-parser';
+import { sendOnlineUsers } from './services/socketService.js';
 
 dotenv.config();
 
@@ -117,6 +118,8 @@ io.on('connection', (socket) => {
     
     // Thêm sự kiện yêu cầu danh sách người dùng đang online
     socket.on('get_online_users', ({ boardId }) => {
+        console.log("Tôi đang ở đây");
+        console.log(`User ${socket.user.id} requested online users in board ${boardId}`);
         emitOnlineUsers(boardId);
     });
     
@@ -164,30 +167,7 @@ io.on('connection', (socket) => {
 
 // Hàm helper để gửi danh sách người dùng đang online trong một board
 function emitOnlineUsers(boardId) {
-    if (!boardRooms.has(boardId)) return;
-    
-    const onlineUserIds = Array.from(boardRooms.get(boardId));
-    const onlineUsers = [];
-    
-    // Lấy thông tin chi tiết của các người dùng đang online
-    onlineUserIds.forEach(userId => {
-        const socketId = userSockets.get(userId);
-        if (socketId) {
-            const socket = io.sockets.sockets.get(socketId);
-            if (socket && socket.user) {
-                onlineUsers.push({
-                    id: socket.user.id,
-                    username: socket.user.username
-                });
-            }
-        }
-    });
-    
-    // Gửi danh sách người dùng đang online đến tất cả người dùng trong board
-    io.to(`board:${boardId}`).emit('online_users', {
-        boardId,
-        users: onlineUsers
-    });
+    sendOnlineUsers(io, boardId);
 }
 
 // Hàm helper để gửi thông báo đến một user
