@@ -54,7 +54,7 @@ const getById = async (req, res) => {
             });
         }
         board.columns = await ColumnModel.getColumnsByBoardId(id, userId) || [];
-         
+        board.user_getting = userId; 
         // Cập nhật board_views
         await BoardModel.updateBoardView(id, userId);
         
@@ -69,11 +69,11 @@ const getById = async (req, res) => {
 
 const update = async (req, res) => {
     const { id } = req.params;
-    const { workspace_id, name, description, cover_img } = req.body;
+    const { workspace_id, name, description, cover_img, visibility } = req.body;
     const userId = req.user.id;
 
     try {
-        const board = await BoardModel.updateBoard(id, userId, { workspace_id, name, description, cover_img });
+        const board = await BoardModel.updateBoard(id, userId, { workspace_id, name, description, cover_img, visibility });
 
         if (!board) {
             return res.status(403).json({ 
@@ -184,13 +184,15 @@ const addMember = async (req, res) => {
     try {
         // Kiểm tra người thêm có phải owner/admin của board không
         const isMember = await BoardModel.isBoardMember(board_id, requestUserId);
-        if (!isMember) {
+        if (!isMember.role || (isMember.role !== 'admin' && isMember.role !== 'owner')) {
             return res.status(403).json({ 
                 message: 'Bạn không có quyền thêm thành viên vào board này' 
             });
         }
 
-        const member = await BoardModel.addBoardMember(board_id, user_id, role);
+        // Thêm thành viên vào board (và tự động thêm vào workspace nếu cần)
+        // Truyền thêm requestUserId để kiểm tra quyền thêm vào workspace
+        const member = await BoardModel.addBoardMember(board_id, user_id, role, requestUserId);
         
         // Lấy thông tin board để thông báo
         const board = await BoardModel.getBoardById(board_id, requestUserId);
@@ -211,11 +213,97 @@ const addMember = async (req, res) => {
             board_id,
             user_id,
             role,
-            added_by: requestUserId
+            added_by: requestUserId,
+            // Thêm thông tin về board và workspace để frontend cập nhật đúng
+            board_name: board.name,
+            workspace_id: board.workspace_id
         }, requestUserId);
         
         res.json({ 
             message: 'Thêm thành viên vào board thành công', 
+            member,
+            workspace_id: board.workspace_id  // Trả về workspace_id để client biết user đã được thêm vào workspace nào
+        });
+    } catch (err) {
+        res.status(400).json({ message: err.message });
+    }
+};
+
+const updateMember = async (req, res) => {
+    const { board_id, user_id } = req.params;
+    const { role } = req.body;
+    const requestUserId = req.user.id;
+
+    try {
+        // Validate role
+        const validRoles = ['owner', 'admin', 'member', 'observer'];
+        if (!validRoles.includes(role)) {
+            return res.status(400).json({ 
+                message: 'Vai trò không hợp lệ. Vai trò phải là một trong: owner, admin, member, observer' 
+            });
+        }
+
+        // Cập nhật vai trò
+        const member = await BoardModel.updateBoardMember(board_id, user_id, role, requestUserId);
+        
+        // Thông báo thay đổi vai trò cho tất cả thành viên
+        emitBoardChange(socketIO, board_id, 'update_member', {
+            board_id,
+            user_id,
+            role,
+            updated_by: requestUserId
+        }, requestUserId);
+        
+        // Thông báo riêng cho người bị thay đổi vai trò
+        await NotificationService.createAndSendNotification({
+            sender_id: requestUserId,
+            receiver_id: user_id,
+            title: 'Vai trò của bạn đã được thay đổi',
+            content: `Vai trò của bạn trong board đã được thay đổi thành ${role}`,
+            type: 'role_changed',
+            entity_type: 'board',
+            entity_id: board_id
+        });
+        
+        res.json({ 
+            message: 'Cập nhật vai trò thành viên thành công', 
+            member 
+        });
+    } catch (err) {
+        res.status(400).json({ message: err.message });
+    }
+};
+
+const removeMember = async (req, res) => {
+    const { board_id, user_id } = req.params;
+    const requestUserId = req.user.id;
+
+    try {
+        // Xóa thành viên
+        const member = await BoardModel.removeBoardMember(board_id, user_id, requestUserId);
+        
+        // Thông báo xóa thành viên cho tất cả thành viên
+        emitBoardChange(socketIO, board_id, 'remove_member', {
+            board_id,
+            user_id,
+            removed_by: requestUserId
+        }, requestUserId);
+        
+        // Nếu không phải tự rời board, gửi thông báo cho người bị xóa
+        if (requestUserId !== user_id) {
+            await NotificationService.createAndSendNotification({
+                sender_id: requestUserId,
+                receiver_id: user_id,
+                title: 'Bạn đã bị xóa khỏi board',
+                content: `Bạn đã bị xóa khỏi board`,
+                type: 'member_removed',
+                entity_type: 'board',
+                entity_id: board_id
+            });
+        }
+        
+        res.json({ 
+            message: requestUserId === user_id ? 'Rời board thành công' : 'Xóa thành viên thành công',
             member 
         });
     } catch (err) {
@@ -234,5 +322,7 @@ export const BoardController = {
     toggleFavoriteBoard,
     getFavoriteBoards,
     getAllWorkspaces,
-    addMember
+    addMember,
+    updateMember,    // Thêm controller method mới
+    removeMember     // Thêm controller method mới
 };
