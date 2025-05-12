@@ -75,7 +75,7 @@ const isBoardMember = async (boardId, userId) => {
         WHERE bm.board_id = $1 AND bm.user_id = $2
     `;
     const result = await pool.query(query, [boardId, userId]);
-    return result.rows.length > 0;
+    return result.rows[0];
 };
 
 const isAccessibleBoard = async (boardId, userId) => {
@@ -90,14 +90,75 @@ const isAccessibleBoard = async (boardId, userId) => {
     return result.rows.length > 0;
 }
 
-const addBoardMember = async (boardId, userId, role) => {
-    const query = `
-        INSERT INTO board_members (board_id, user_id, role)
-        VALUES ($1, $2, $3)
-        RETURNING *
-    `;
-    const result = await pool.query(query, [boardId, userId, role]);
-    return result.rows[0];
+// Thêm tham số addedBy vào hàm để biết ai là người thêm
+const addBoardMember = async (boardId, userId, role, addedBy) => {
+    const client = await pool.connect();
+    try {
+        await client.query('BEGIN');
+        
+        // Lấy workspace_id của board
+        const boardQuery = `SELECT workspace_id FROM boards WHERE id = $1`;
+        const boardResult = await client.query(boardQuery, [boardId]);
+        
+        if (boardResult.rows.length === 0) {
+            throw new Error('Board không tồn tại');
+        }
+        
+        const workspaceId = boardResult.rows[0].workspace_id;
+        
+        // Kiểm tra xem user đã là thành viên workspace chưa
+        const workspaceMemberQuery = `
+            SELECT 1 FROM workspace_members 
+            WHERE workspace_id = $1 AND user_id = $2
+        `;
+        const workspaceMemberResult = await client.query(workspaceMemberQuery, [workspaceId, userId]);
+        
+        // Nếu chưa là thành viên workspace
+        if (workspaceMemberResult.rows.length === 0) {
+            // Kiểm tra quyền của người thêm trong workspace
+            const requesterRoleQuery = `
+                SELECT role FROM workspace_members 
+                WHERE workspace_id = $1 AND user_id = $2
+            `;
+            const requesterRoleResult = await client.query(requesterRoleQuery, [workspaceId, addedBy]);
+            
+            if (requesterRoleResult.rows.length === 0) {
+                throw new Error('Người thêm không phải là thành viên workspace');
+            }
+            
+            const requesterRole = requesterRoleResult.rows[0].role;
+            
+            // Chỉ owner và admin mới có quyền thêm thành viên vào workspace
+            if (!['owner', 'admin'].includes(requesterRole)) {
+                throw new Error('Bạn không có quyền thêm thành viên vào workspace này');
+            }
+            
+            // Thêm người dùng vào workspace với role 'member'
+            const addWorkspaceMemberQuery = `
+                INSERT INTO workspace_members (workspace_id, user_id, role)
+                VALUES ($1, $2, 'member')
+            `;
+            await client.query(addWorkspaceMemberQuery, [workspaceId, userId]);
+        }
+        
+        // Thêm user vào board
+        const addBoardMemberQuery = `
+            INSERT INTO board_members (board_id, user_id, role)
+            VALUES ($1, $2, $3)
+            ON CONFLICT (board_id, user_id) DO UPDATE
+            SET role = $3
+            RETURNING *
+        `;
+        const result = await client.query(addBoardMemberQuery, [boardId, userId, role]);
+        
+        await client.query('COMMIT');
+        return result.rows[0];
+    } catch (err) {
+        await client.query('ROLLBACK');
+        throw err;
+    } finally {
+        client.release();
+    }
 };
 
 const getBoardById = async (id, userId) => {
@@ -112,20 +173,34 @@ const getBoardById = async (id, userId) => {
             b.*, 
             (bf.id IS NOT NULL) as is_favorite,
             (SELECT bm.role FROM board_members bm WHERE bm.board_id = b.id AND bm.user_id = $2) as user_role,
-            json_agg(DISTINCT bm.*) as members
+            
+            COALESCE(
+                json_agg(
+                    json_build_object(
+                        'user_id', bm.user_id,
+                        'board_id', bm.board_id,
+                        'role', bm.role,
+                        'joined_at', bm.joined_at,
+                        'username', u.username,
+                        'email', u.email,
+                        'is_current_user', (bm.user_id = $2)
+                    )
+                ) FILTER (WHERE bm.user_id IS NOT NULL),
+                '[]'
+            ) as members
         FROM boards b
         LEFT JOIN board_members bm ON b.id = bm.board_id
+        LEFT JOIN users u ON bm.user_id = u.id
         LEFT JOIN board_favorites bf ON b.id = bf.board_id AND bf.user_id = $2
         WHERE b.id = $1
         GROUP BY b.id, bf.id
     `;
-
     
     const result = await pool.query(query, [id, userId]);
     return result.rows[0];
 };
 
-const updateBoard = async (boardId, userId, { workspace_id, name, description, cover_img }) => {
+const updateBoard = async (boardId, userId, { workspace_id, name, description, cover_img, visibility }) => {
     // Start a transaction since we're checking workspace membership
     const client = await pool.connect();
     try {
@@ -150,8 +225,9 @@ const updateBoard = async (boardId, userId, { workspace_id, name, description, c
             SET 
                 workspace_id = COALESCE($1, b.workspace_id),
                 name = COALESCE($2, b.name),
-                description = $3,
-                cover_img = $4,
+                description = COALESCE($3, b.description),
+                cover_img = COALESCE($4, b.cover_img),
+                visibility = COALESCE($5, b.visibility)
             FROM board_members bm
             WHERE b.id = $6 
             AND bm.board_id = b.id 
@@ -167,7 +243,7 @@ const updateBoard = async (boardId, userId, { workspace_id, name, description, c
                 b.created_at,
                 b.updated_at
             `,
-            [workspace_id, name, description, cover_img, boardId, userId]
+            [workspace_id, name, description, cover_img, visibility, boardId, userId]
         );
 
         await client.query('COMMIT');
@@ -321,6 +397,153 @@ const updateBoardView = async (boardId, userId) => {
     return result.rows[0];
 };
 
+const updateBoardMember = async (boardId, userId, newRole, requesterId) => {
+    const client = await pool.connect();
+    try {
+        await client.query('BEGIN');
+        
+        // Kiểm tra xem người thực hiện yêu cầu có quyền không
+        const requesterRoleQuery = `
+            SELECT role FROM board_members 
+            WHERE board_id = $1 AND user_id = $2
+        `;
+        const requesterRoleResult = await client.query(requesterRoleQuery, [boardId, requesterId]);
+        
+        if (requesterRoleResult.rows.length === 0) {
+            throw new Error('Bạn không phải là thành viên của board này');
+        }
+        
+        const requesterRole = requesterRoleResult.rows[0].role;
+        if (requesterRole !== 'owner' && requesterRole !== 'admin') {
+            throw new Error('Bạn không có quyền cập nhật vai trò thành viên');
+        }
+        
+        // Kiểm tra người bị cập nhật vai trò có phải là owner không
+        const targetRoleQuery = `
+            SELECT role FROM board_members 
+            WHERE board_id = $1 AND user_id = $2
+        `;
+        const targetRoleResult = await client.query(targetRoleQuery, [boardId, userId]);
+        
+        if (targetRoleResult.rows.length === 0) {
+            throw new Error('Thành viên không tồn tại trong board');
+        }
+        
+        const targetRole = targetRoleResult.rows[0].role;
+        
+        // Chỉ owner mới có thể thay đổi role của một người khác thành owner
+        if (newRole === 'owner' && requesterRole !== 'owner') {
+            throw new Error('Chỉ owner mới có thể chỉ định owner mới');
+        }
+        
+        // Chỉ owner mới có thể thay đổi role của owner khác
+        if (targetRole === 'owner' && requesterRole !== 'owner') {
+            throw new Error('Chỉ owner mới có thể thay đổi vai trò của owner khác');
+        }
+        
+        // Cập nhật vai trò thành viên
+        const updateQuery = `
+            UPDATE board_members 
+            SET role = $3 
+            WHERE board_id = $1 AND user_id = $2 
+            RETURNING *
+        `;
+        const result = await client.query(updateQuery, [boardId, userId, newRole]);
+        
+        // Nếu thay đổi owner, chuyển người request từ owner thành admin
+        if (newRole === 'owner' && requesterRole === 'owner' && requesterId !== userId) {
+            await client.query(
+                `UPDATE board_members SET role = 'admin' WHERE board_id = $1 AND user_id = $2`,
+                [boardId, requesterId]
+            );
+        }
+        
+        await client.query('COMMIT');
+        return result.rows[0];
+    } catch (err) {
+        await client.query('ROLLBACK');
+        throw err;
+    } finally {
+        client.release();
+    }
+};
+
+const removeBoardMember = async (boardId, userId, requesterId) => {
+    const client = await pool.connect();
+    try {
+        await client.query('BEGIN');
+        
+        // Kiểm tra xem người thực hiện yêu cầu có quyền không
+        const requesterRoleQuery = `
+            SELECT role FROM board_members 
+            WHERE board_id = $1 AND user_id = $2
+        `;
+        const requesterRoleResult = await client.query(requesterRoleQuery, [boardId, requesterId]);
+        
+        if (requesterRoleResult.rows.length === 0) {
+            throw new Error('Bạn không phải là thành viên của board này');
+        }
+        
+        const requesterRole = requesterRoleResult.rows[0].role;
+        
+        // Nếu tự rời board, cho phép mọi role
+        if (requesterId === userId) {
+            // Owner không thể tự rời nếu là owner duy nhất
+            if (requesterRole === 'owner') {
+                const ownerCountQuery = `
+                    SELECT COUNT(*) as owner_count 
+                    FROM board_members 
+                    WHERE board_id = $1 AND role = 'owner'
+                `;
+                const ownerCountResult = await client.query(ownerCountQuery, [boardId]);
+                
+                if (ownerCountResult.rows[0].owner_count <= 1) {
+                    throw new Error('Bạn là owner duy nhất của board. Vui lòng chỉ định owner mới trước khi rời board.');
+                }
+            }
+        } else {
+            // Nếu xóa người khác, phải là admin hoặc owner
+            if (requesterRole !== 'owner' && requesterRole !== 'admin') {
+                throw new Error('Bạn không có quyền xóa thành viên');
+            }
+            
+            // Kiểm tra role của người bị xóa
+            const targetRoleQuery = `
+                SELECT role FROM board_members 
+                WHERE board_id = $1 AND user_id = $2
+            `;
+            const targetRoleResult = await client.query(targetRoleQuery, [boardId, userId]);
+            
+            if (targetRoleResult.rows.length === 0) {
+                throw new Error('Thành viên không tồn tại trong board');
+            }
+            
+            const targetRole = targetRoleResult.rows[0].role;
+            
+            // Admin không thể xóa owner và admin khác
+            if (requesterRole === 'admin' && (targetRole === 'owner' || targetRole === 'admin')) {
+                throw new Error('Admin không thể xóa owner hoặc admin khác');
+            }
+        }
+        
+        // Xóa thành viên
+        const deleteQuery = `
+            DELETE FROM board_members 
+            WHERE board_id = $1 AND user_id = $2 
+            RETURNING *
+        `;
+        const result = await client.query(deleteQuery, [boardId, userId]);
+        
+        await client.query('COMMIT');
+        return result.rows[0];
+    } catch (err) {
+        await client.query('ROLLBACK');
+        throw err;
+    } finally {
+        client.release();
+    }
+};
+
 export const BoardModel = {
     createBoard,
     getBoardsByWorkspaceId,
@@ -334,5 +557,7 @@ export const BoardModel = {
     getAllWorkspacesByUserId,
     isBoardMember,
     addBoardMember,
-    updateBoardView
+    updateBoardView,
+    updateBoardMember,    // Thêm method mới
+    removeBoardMember     // Thêm method mới
 };
