@@ -52,16 +52,16 @@ const login = async (req, res) => {
     try {
         const user = await UserModel.findUserByEmail(email);
         if (!user) {
-            return res.status(400).json({status: false, message: 'Email hoặc mật khẩu không đúng' });
+            return res.status(200).json({status: false, message: 'Email hoặc mật khẩu không đúng' });
         }
 
         if (!user.is_verified) {
-            return res.status(403).json({status: false, message: 'Tài khoản chưa được xác thực. Vui lòng kiểm tra email.' });
+            return res.status(200).json({status: false, message: 'Tài khoản chưa được xác thực. Vui lòng kiểm tra email.' });
         }
 
         const isMatch = await bcrypt.compare(password, user.password);
         if (!isMatch) {
-            return res.status(400).json({status: false, message: 'Email hoặc mật khẩu không đúng' });
+            return res.status(200).json({status: false, message: 'Email hoặc mật khẩu không đúng' });
         }
 
         const accessToken = jwt.sign(
