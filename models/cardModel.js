@@ -1,48 +1,86 @@
 import pool from '../config/db.js';
 
-const createCard = async ({ column_id, title, description, position, created_by, assigned_to, due_date }) => {
+const createCard = async ({ column_id, title, description, position, created_by, assigned_to, due_date, status, priority_level, difficulty_level }) => {
     const client = await pool.connect();
     try {
         await client.query('BEGIN');
-        // Kiểm tra user có trong workspace chứa column
-        const accessResult = await client.query(
+        
+        // Kiểm tra user có phải là member của board chứa column này không
+        const boardAccessResult = await client.query(
             `
-            SELECT 1 
-            FROM workspace_members wm
-            JOIN boards b ON b.workspace_id = wm.workspace_id
-            JOIN columns c ON c.board_id = b.id
-            WHERE c.id = $1 AND wm.user_id = $2
+            SELECT bm.role 
+            FROM board_members bm
+            JOIN columns c ON c.board_id = bm.board_id
+            WHERE c.id = $1 AND bm.user_id = $2
             `,
             [column_id, created_by]
         );
-        if (!accessResult.rows[0]) {
-            throw new Error('Bạn không có quyền tạo card trong column này');
+        
+        if (boardAccessResult.rows.length === 0) {
+            throw new Error('Bạn phải là thành viên của board để tạo card');
         }
 
-        // Kiểm tra assigned_to (nếu có) thuộc workspace
+        // Kiểm tra assigned_to (nếu có) có phải là member của board không
         if (assigned_to) {
             const assigneeResult = await client.query(
                 `
                 SELECT 1
-                FROM workspace_members wm
-                JOIN boards b ON b.workspace_id = wm.workspace_id
-                JOIN columns c ON c.board_id = b.id
-                WHERE c.id = $1 AND wm.user_id = $2
+                FROM board_members bm
+                JOIN columns c ON c.board_id = bm.board_id
+                WHERE c.id = $1 AND bm.user_id = $2
                 `,
                 [column_id, assigned_to]
             );
-            console.log('Assignee result:', assigneeResult.rows[0]);
             if (!assigneeResult.rows[0]) {
-                throw new Error('Người được giao không thuộc workspace');
+                throw new Error('Chỉ có thể gán card cho thành viên của board');
             }
         }
 
+        // Tự động tính toán position mới nhất nếu không được cung cấp
+        let cardPosition = position;
+        if (cardPosition === undefined || cardPosition === null) {
+            const positionResult = await client.query(
+                `SELECT COALESCE(MAX(position) + 1, 0) as next_position 
+                 FROM cards 
+                 WHERE column_id = $1`,
+                [column_id]
+            );
+            cardPosition = positionResult.rows[0].next_position;
+        }
+
+        // Tiếp tục như cũ
         const result = await client.query(
-            'INSERT INTO cards (column_id, title, description, position, created_by, assigned_to, due_date) VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING *',
-            [column_id, title, description, position || 0, created_by, assigned_to || null, due_date || null]
+            `INSERT INTO cards 
+             (column_id, title, description, position, created_by, assigned_to, due_date, 
+              status, priority_level, difficulty_level) 
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) 
+             RETURNING *`,
+            [
+                column_id, 
+                title, 
+                description, 
+                cardPosition, 
+                created_by, 
+                assigned_to || null, 
+                due_date || null,
+                status || 'todo',
+                priority_level || 0,
+                difficulty_level || 0
+            ]
         );
 
-        console.log('Card created:', result.rows[0]);
+        // Ghi lại hoạt động tạo card
+        await client.query(
+            `INSERT INTO card_activities 
+             (card_id, user_id, activity_type, activity_data) 
+             VALUES ($1, $2, $3, $4)`,
+            [
+                result.rows[0].id,
+                created_by,
+                'created',
+                JSON.stringify({ title, description })
+            ]
+        );
 
         await client.query('COMMIT');
         return result.rows[0];
@@ -55,104 +93,401 @@ const createCard = async ({ column_id, title, description, position, created_by,
 };
 
 const getCardsByColumnId = async (column_id, userId) => {
-    const result = await pool.query(
+    // Kiểm tra quyền truy cập - chỉ member của board hoặc người xem board public
+    const permissionCheck = await pool.query(
         `
-        SELECT c.id, c.column_id, c.title, c.description, c.position, c.created_by, c.assigned_to, c.due_date, c.created_at
-        FROM cards c
-        JOIN columns col ON c.column_id = col.id
-        JOIN boards b ON col.board_id = b.id
-        JOIN workspace_members wm ON b.workspace_id = wm.workspace_id
-        WHERE c.column_id = $1 AND wm.user_id = $2
-        ORDER BY c.position, c.created_at
+        SELECT 1
+        FROM board_members bm
+        JOIN columns c ON c.board_id = bm.board_id
+        WHERE c.id = $1 AND bm.user_id = $2
+        UNION
+        SELECT 1
+        FROM boards b
+        JOIN columns c ON c.board_id = b.id
+        WHERE c.id = $1 AND b.visibility = 1
         `,
         [column_id, userId]
     );
+    
+    if (permissionCheck.rows.length === 0) {
+        throw new Error('Bạn không có quyền xem các card trong column này');
+    }
+    
+    // Tiếp tục lấy dữ liệu...
+    const result = await pool.query(
+        `
+        SELECT c.id, c.column_id, c.title, c.description, c.position, 
+               c.created_by, c.assigned_to, c.due_date, c.created_at,
+               c.cover_img, c.updated_at, c.resolved_at, c.status,
+               c.priority_level, c.difficulty_level,
+               u.username as created_by_name,
+               au.username as assigned_to_name,
+               (SELECT COUNT(*) FROM card_attachments WHERE card_id = c.id AND is_deleted = false) as attachment_count,
+               (SELECT COUNT(*) FROM card_comments WHERE card_id = c.id AND is_deleted = false) as comment_count,
+               (SELECT json_agg(json_build_object('id', l.id, 'name', l.name, 'color', l.color)) 
+                FROM card_labels cl 
+                JOIN labels l ON cl.label_id = l.id 
+                WHERE cl.card_id = c.id) as labels
+        FROM cards c
+        JOIN columns col ON c.column_id = col.id
+        JOIN users u ON c.created_by = u.id
+        LEFT JOIN users au ON c.assigned_to = au.id
+        WHERE c.column_id = $1
+        ORDER BY c.position, c.created_at
+        `,
+        [column_id]
+    );
+    
     return result.rows;
 };
 
 const getCardById = async (cardId, userId) => {
-    const result = await pool.query(
+    // Kiểm tra quyền truy cập - chỉ member của board hoặc người xem board public
+    const permissionCheck = await pool.query(
         `
-        SELECT c.id, c.column_id, c.title, c.description, c.position, c.created_by, c.assigned_to, c.due_date, c.created_at
-        FROM cards c
-        JOIN columns col ON c.column_id = col.id
-        JOIN boards b ON col.board_id = b.id
-        JOIN workspace_members wm ON b.workspace_id = wm.workspace_id
-        WHERE c.id = $1 AND wm.user_id = $2
+        SELECT 1
+        FROM board_members bm
+        JOIN columns c ON c.board_id = bm.board_id
+        JOIN cards card ON card.column_id = c.id
+        WHERE card.id = $1 AND bm.user_id = $2
+        UNION
+        SELECT 1
+        FROM boards b
+        JOIN columns c ON c.board_id = b.id
+        JOIN cards card ON card.column_id = c.id
+        WHERE card.id = $1 AND b.visibility = 1
         `,
         [cardId, userId]
     );
+    
+    if (permissionCheck.rows.length === 0) {
+        throw new Error('Bạn không có quyền xem card này');
+    }
+    
+    // Tiếp tục lấy dữ liệu...
+    const result = await pool.query(
+        `
+        SELECT c.id, c.column_id, c.title, c.description, c.position,
+               c.created_by, c.assigned_to, c.due_date, c.created_at,
+               c.cover_img, c.updated_at, c.resolved_at, c.status,
+               c.priority_level, c.difficulty_level,
+               u.username as created_by_name, u.email as created_by_email,
+               au.username as assigned_to_name, au.email as assigned_to_email,
+               b.id as board_id, b.name as board_name,
+               col.name as column_name,
+               (SELECT json_agg(
+                   json_build_object(
+                       'id', ca.id,
+                       'file_name', ca.file_name,
+                       'file_path', ca.file_path,
+                       'file_type', ca.file_type,
+                       'file_size', ca.file_size,
+                       'uploaded_by', ca.uploaded_by,
+                       'created_at', ca.created_at
+                   )
+               ) FROM card_attachments ca WHERE ca.card_id = c.id AND ca.is_deleted = false) as attachments,
+               (SELECT json_agg(
+                   json_build_object(
+                       'id', l.id,
+                       'name', l.name,
+                       'color', l.color
+                   )
+               ) FROM card_labels cl JOIN labels l ON cl.label_id = l.id WHERE cl.card_id = c.id) as labels,
+               (SELECT json_agg(
+                   json_build_object(
+                       'id', cc.id,
+                       'user_id', cc.user_id,
+                       'username', u2.username,
+                       'content', cc.content,
+                       'created_at', cc.created_at,
+                       'updated_at', cc.updated_at,
+                       'is_edited', cc.is_edited,
+                       'parent_id', cc.parent_id
+                   ) ORDER BY cc.created_at
+               ) FROM card_comments cc JOIN users u2 ON cc.user_id = u2.id 
+                  WHERE cc.card_id = c.id AND cc.is_deleted = false) as comments,
+               (SELECT json_agg(
+                   json_build_object(
+                       'id', ca.id,
+                       'user_id', ca.user_id,
+                       'username', u3.username,
+                       'activity_type', ca.activity_type,
+                       'activity_data', ca.activity_data,
+                       'created_at', ca.created_at
+                   ) ORDER BY ca.created_at DESC
+               ) FROM card_activities ca JOIN users u3 ON ca.user_id = u3.id WHERE ca.card_id = c.id) as activities
+        FROM cards c
+        JOIN columns col ON c.column_id = col.id
+        JOIN boards b ON col.board_id = b.id
+        JOIN users u ON c.created_by = u.id
+        LEFT JOIN users au ON c.assigned_to = au.id
+        WHERE c.id = $1
+        `,
+        [cardId]
+    );
+    
     return result.rows[0];
 };
 
-const updateCard = async (cardId, userId, { title, description, position, column_id, assigned_to, due_date }) => {
+const getCardDetails = async (cardId, userId) => {
+    const client = await pool.connect();
+    try {
+        // Kiểm tra quyền truy cập - chỉ member của board hoặc người xem board public
+        const permissionCheck = await client.query(
+            `SELECT bm.role FROM cards c
+            JOIN columns col ON c.column_id = col.id
+            JOIN boards b ON col.board_id = b.id
+            JOIN board_members bm ON b.id = bm.board_id
+            WHERE c.id = $1 AND bm.user_id = $2
+            UNION
+            SELECT 'public' as role FROM cards c
+            JOIN columns col ON c.column_id = col.id
+            JOIN boards b ON col.board_id = b.id
+            WHERE c.id = $1 AND b.visibility = 1`,
+            [cardId, userId]
+        );
+
+        if (permissionCheck.rows.length === 0) {
+            throw new Error('Bạn không có quyền xem chi tiết của card này');
+        }
+
+        // Lấy thông tin card và dữ liệu liên quan...
+        const cardResult = await client.query(
+            `SELECT c.*, 
+             col.title as column_name,
+             col.board_id,
+             b.name as board_name,
+             creator.username as created_by_username,
+             assignee.username as assigned_to_username,
+             assignee.email as assigned_to_email
+             FROM cards c
+             JOIN columns col ON c.column_id = col.id
+             JOIN boards b ON col.board_id = b.id
+             LEFT JOIN users creator ON c.created_by = creator.id
+             LEFT JOIN users assignee ON c.assigned_to = assignee.id
+             WHERE c.id = $1`,
+            [cardId]
+        );
+
+        if (cardResult.rows.length === 0) {
+            throw new Error('Card không tồn tại');
+        }
+
+        const card = cardResult.rows[0];
+
+        // Lấy các dữ liệu khác...
+        const labelsResult = await client.query(
+            `SELECT l.* FROM labels l
+            JOIN card_labels cl ON l.id = cl.label_id
+            WHERE cl.card_id = $1
+            ORDER BY l.name`,
+            [cardId]
+        );
+
+        // Lấy các tệp đính kèm
+        const attachmentsResult = await client.query(
+            `SELECT ca.*, u.username as uploaded_by_username
+            FROM card_attachments ca
+            LEFT JOIN users u ON ca.uploaded_by = u.id
+            WHERE ca.card_id = $1 AND ca.is_deleted = false
+            ORDER BY ca.created_at DESC`,
+            [cardId]
+        );
+
+        // Lấy các bình luận
+        const commentsResult = await client.query(
+            `SELECT cc.*, u.username, u.email
+            FROM card_comments cc
+            JOIN users u ON cc.user_id = u.id
+            WHERE cc.card_id = $1 AND cc.is_deleted = false
+            ORDER BY cc.created_at ASC`,
+            [cardId]
+        );
+
+        // Lấy các hoạt động
+        const activitiesResult = await client.query(
+            `SELECT ca.*, u.username, u.email
+            FROM card_activities ca
+            JOIN users u ON ca.user_id = u.id
+            WHERE ca.card_id = $1
+            ORDER BY ca.created_at DESC
+            LIMIT 20`, // Giới hạn 20 hoạt động gần nhất
+            [cardId]
+        );
+
+        const cardDetails = {
+            ...card,
+            labels: labelsResult.rows,
+            attachments: attachmentsResult.rows,
+            comments: commentsResult.rows.map(comment => ({
+                ...comment,
+                user: {
+                    id: comment.user_id,
+                    username: comment.username,
+                    email: comment.email
+                }
+            })),
+            activities: activitiesResult.rows.map(activity => ({
+                ...activity,
+                user: {
+                    id: activity.user_id,
+                    username: activity.username,
+                    email: activity.email
+                }
+            })),
+            assigned_to: card.assigned_to ? {
+                id: card.assigned_to,
+                username: card.assigned_to_username,
+                email: card.assigned_to_email
+            } : null
+        };
+
+        return cardDetails;
+    } finally {
+        client.release();
+    }
+};
+
+const updateCard = async (cardId, userId, { 
+    title, description, position, column_id, assigned_to, due_date, 
+    cover_img, status, priority_level, difficulty_level, resolved_at 
+}) => {
     const client = await pool.connect();
     try {
         await client.query('BEGIN');
 
-        // Kiểm tra quyền: owner/admin hoặc người tạo card
-        const permissionResult = await client.query(
+        // Lấy thông tin card và kiểm tra quyền
+        const cardQuery = await client.query(
             `
-            SELECT c.created_by, wm.role
+            SELECT c.*, col.board_id
             FROM cards c
             JOIN columns col ON c.column_id = col.id
-            JOIN boards b ON col.board_id = b.id
-            JOIN workspace_members wm ON b.workspace_id = wm.workspace_id
-            WHERE c.id = $1 AND wm.user_id = $2
+            WHERE c.id = $1
             `,
-            [cardId, userId]
+            [cardId]
         );
-        if (!permissionResult.rows[0]) {
+        
+        if (cardQuery.rows.length === 0) {
+            throw new Error('Card không tồn tại');
+        }
+        
+        const card = cardQuery.rows[0];
+        const boardId = card.board_id;
+        
+        // Kiểm tra người dùng có phải là member của board không
+        const memberCheck = await client.query(
+            `SELECT role FROM board_members
+             WHERE board_id = $1 AND user_id = $2`,
+            [boardId, userId]
+        );
+        
+        if (memberCheck.rows.length === 0) {
+            throw new Error('Bạn không phải là thành viên của board');
+        }
+        
+        // Kiểm tra quyền chỉnh sửa dựa trên vai trò
+        const isAdmin = memberCheck.rows[0].role === 'admin' || memberCheck.rows[0].role === 'owner';
+        const isCreator = card.created_by === userId;
+        
+        if (!isAdmin && !isCreator) {
             throw new Error('Bạn không có quyền cập nhật card này');
         }
-        const { created_by, role } = permissionResult.rows[0];
-        if (created_by !== userId && !['owner', 'admin'].includes(role)) {
-            throw new Error('Bạn không có quyền cập nhật card này');
+
+        // Kiểm tra assigned_to nếu có thay đổi
+        if (assigned_to !== undefined && assigned_to !== card.assigned_to) {
+            if (assigned_to !== null) {
+                const assigneeCheck = await client.query(
+                    `SELECT 1 FROM board_members
+                     WHERE board_id = $1 AND user_id = $2`,
+                    [boardId, assigned_to]
+                );
+                
+                if (assigneeCheck.rows.length === 0) {
+                    throw new Error('Chỉ có thể gán card cho thành viên của board');
+                }
+            }
         }
 
         // Kiểm tra column_id mới (nếu thay đổi)
-        if (column_id) {
-            const columnResult = await client.query(
-                `
-                SELECT 1
-                FROM columns c
-                JOIN boards b ON c.board_id = b.id
-                JOIN workspace_members wm ON b.workspace_id = wm.workspace_id
-                WHERE c.id = $1 AND wm.user_id = $2
-                `,
-                [column_id, userId]
+        if (column_id && column_id !== card.column_id) {
+            const columnCheck = await client.query(
+                `SELECT board_id FROM columns
+                 WHERE id = $1`,
+                [column_id]
             );
-            if (!columnResult.rows[0]) {
-                throw new Error('Column không hợp lệ hoặc bạn không có quyền truy cập');
+            
+            if (columnCheck.rows.length === 0) {
+                throw new Error('Column không tồn tại');
+            }
+            
+            if (columnCheck.rows[0].board_id !== boardId) {
+                throw new Error('Không thể di chuyển card sang board khác');
             }
         }
 
-        // Kiểm tra assigned_to (nếu thay đổi)
-        if (assigned_to) {
-            const assigneeResult = await client.query(
-                `
-                SELECT 1
-                FROM workspace_members wm
-                JOIN boards b ON b.workspace_id = wm.workspace_id
-                JOIN columns col ON col.board_id = b.id
-                WHERE col.id = $1 AND wm.user_id = $2
-                `,
-                [column_id || (await client.query('SELECT column_id FROM cards WHERE id = $1', [cardId])).rows[0].column_id, assigned_to]
-            );
-            if (!assigneeResult.rows[0]) {
-                throw new Error('Người được giao không thuộc workspace');
-            }
-        }
-
+        // Xác định các thay đổi để ghi log
+        const changes = {};
+        if (title && title !== card.title) changes.title = { from: card.title, to: title };
+        if (description && description !== card.description) changes.description = { from: card.description, to: description };
+        if (status && status !== card.status) changes.status = { from: card.status, to: status };
+        if (priority_level !== undefined && priority_level !== card.priority_level) 
+            changes.priority_level = { from: card.priority_level, to: priority_level };
+        if (difficulty_level !== undefined && difficulty_level !== card.difficulty_level) 
+            changes.difficulty_level = { from: card.difficulty_level, to: difficulty_level };
+        if (column_id && column_id !== card.column_id) changes.column_id = { from: card.column_id, to: column_id };
+        if (assigned_to !== undefined && assigned_to !== card.assigned_to) changes.assigned_to = { from: card.assigned_to, to: assigned_to };
+        if (due_date && due_date !== card.due_date) changes.due_date = { from: card.due_date, to: due_date };
+        if (resolved_at && resolved_at !== card.resolved_at) changes.resolved_at = { from: card.resolved_at, to: resolved_at };
+        
+        // Cập nhật card
         const result = await client.query(
             `
             UPDATE cards
-            SET title = $1, description = $2, position = COALESCE($3, position), column_id = COALESCE($4, column_id), assigned_to = $5, due_date = $6
-            WHERE id = $7
+            SET title = COALESCE($1, title), 
+                description = COALESCE($2, description), 
+                position = COALESCE($3, position), 
+                column_id = COALESCE($4, column_id), 
+                assigned_to = $5, 
+                due_date = $6,
+                cover_img = COALESCE($7, cover_img),
+                status = COALESCE($8, status),
+                priority_level = COALESCE($9, priority_level),
+                difficulty_level = COALESCE($10, difficulty_level),
+                resolved_at = $11,
+                updated_at = CURRENT_TIMESTAMP
+            WHERE id = $12
             RETURNING *
             `,
-            [title, description, position, column_id, assigned_to || null, due_date || null, cardId]
+            [
+                title, 
+                description, 
+                position, 
+                column_id, 
+                assigned_to, // Có thể là null để xóa người được giao
+                due_date, // Có thể là null để xóa ngày hết hạn
+                cover_img,
+                status,
+                priority_level,
+                difficulty_level,
+                resolved_at,
+                cardId
+            ]
         );
+
+        // Ghi lại hoạt động cập nhật
+        if (Object.keys(changes).length > 0) {
+            await client.query(
+                `INSERT INTO card_activities 
+                (card_id, user_id, activity_type, activity_data) 
+                VALUES ($1, $2, $3, $4)`,
+                [
+                    cardId,
+                    userId,
+                    'updated',
+                    JSON.stringify(changes)
+                ]
+            );
+        }
 
         await client.query('COMMIT');
         return result.rows[0];
@@ -169,27 +504,50 @@ const deleteCard = async (cardId, userId) => {
     try {
         await client.query('BEGIN');
 
-        // Kiểm tra quyền: owner/admin hoặc người tạo card
-        const permissionResult = await client.query(
+        // Lấy thông tin card và kiểm tra quyền
+        const cardQuery = await client.query(
             `
-            SELECT c.created_by, wm.role
+            SELECT c.*, col.board_id
             FROM cards c
             JOIN columns col ON c.column_id = col.id
-            JOIN boards b ON col.board_id = b.id
-            JOIN workspace_members wm ON b.workspace_id = wm.workspace_id
-            WHERE c.id = $1 AND wm.user_id = $2
+            WHERE c.id = $1
             `,
-            [cardId, userId]
+            [cardId]
         );
-        if (!permissionResult.rows[0]) {
-            throw new Error('Bạn không có quyền xóa card này');
+        
+        if (cardQuery.rows.length === 0) {
+            throw new Error('Card không tồn tại');
         }
-        const { created_by, role } = permissionResult.rows[0];
-        if (created_by !== userId && !['owner', 'admin'].includes(role)) {
+        
+        const card = cardQuery.rows[0];
+        const boardId = card.board_id;
+        
+        // Kiểm tra người dùng có phải là member của board không
+        const memberCheck = await client.query(
+            `SELECT role FROM board_members
+             WHERE board_id = $1 AND user_id = $2`,
+            [boardId, userId]
+        );
+        
+        if (memberCheck.rows.length === 0) {
+            throw new Error('Bạn không phải là thành viên của board');
+        }
+        
+        // Kiểm tra quyền xóa dựa trên vai trò
+        const isAdmin = memberCheck.rows[0].role === 'admin' || memberCheck.rows[0].role === 'owner';
+        const isCreator = card.created_by === userId;
+        
+        if (!isAdmin && !isCreator) {
             throw new Error('Bạn không có quyền xóa card này');
         }
 
-        const result = await client.query('DELETE FROM cards WHERE id = $1 RETURNING id', [cardId]);
+        // Xóa tất cả dữ liệu liên quan
+        await client.query('DELETE FROM card_activities WHERE card_id = $1', [cardId]);
+        await client.query('DELETE FROM card_comments WHERE card_id = $1', [cardId]);
+        await client.query('DELETE FROM card_labels WHERE card_id = $1', [cardId]);
+        await client.query('DELETE FROM card_attachments WHERE card_id = $1', [cardId]);
+        
+        const result = await client.query('DELETE FROM cards WHERE id = $1 RETURNING id, column_id', [cardId]);
 
         await client.query('COMMIT');
         return result.rows[0];
@@ -205,6 +563,7 @@ export const CardModel = {
     createCard,
     getCardsByColumnId,
     getCardById,
+    getCardDetails,
     updateCard,
     deleteCard,
 };

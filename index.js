@@ -10,6 +10,9 @@ import boardRoutes from './routes/boardRoutes.js';
 import columnRoutes from './routes/columnRoutes.js';
 import cardRoutes from './routes/cardRoutes.js';
 import notificationRoutes from './routes/notificationRoutes.js';
+import labelRoutes from './routes/labelRoutes.js';
+import attachmentRoutes from './routes/attachmentRoutes.js';
+import commentRoutes from './routes/commentRoutes.js';
 import cookieParser from 'cookie-parser';
 import { sendOnlineUsers } from './services/socketService.js';
 
@@ -186,6 +189,12 @@ app.use('/api/boards', boardRoutes);
 app.use('/api/columns', columnRoutes);
 app.use('/api/cards', cardRoutes);
 app.use('/api/notifications', notificationRoutes);
+app.use('/api/labels', labelRoutes);
+app.use('/api/attachments', attachmentRoutes);
+app.use('/api/comments', commentRoutes);
+
+// Thêm middleware để phục vụ các tệp tĩnh
+app.use('/uploads', express.static('uploads'));
 
 // Khởi động server
 httpServer.listen(port, () => {

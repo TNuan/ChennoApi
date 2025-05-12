@@ -31,6 +31,9 @@ router.get('/:column_id', authenticateToken, CardController.getAll);
 
 router.get('/single/:id', authenticateToken, CardController.getById);
 
+// Lấy chi tiết đầy đủ của card bao gồm các nhãn, tệp đính kèm, bình luận và hoạt động
+router.get('/details/:id', authenticateToken, CardController.getCardDetails);
+
 router.put(
     '/:id',
     authenticateToken,
