@@ -97,6 +97,8 @@ const update = async (req, res) => {
     const userId = req.user.id;
 
     try {
+        console.log('Updating card with ID:', id);
+        console.log('Request body:', cover_img);
         const card = await CardModel.updateCard(id, userId, { 
             title, description, position, column_id, assigned_to, due_date,
             cover_img, status, priority_level, difficulty_level, resolved_at
