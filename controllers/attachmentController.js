@@ -75,11 +75,11 @@ const upload = async (req, res) => {
         );
         
         const boardId = boardQuery.rows[0]?.id;
-        
+
         if (boardId && socketIO) {
             emitBoardChange(socketIO, boardId, 'attachment_added', {
-                card_id,
-                attachment
+                attachment,
+                card_id
             }, uploaded_by);
         }
         
@@ -101,12 +101,13 @@ const getAll = async (req, res) => {
     }
 };
 
+// Cập nhật hàm remove trong attachmentController.js
 const remove = async (req, res) => {
     const { id } = req.params;
     const userId = req.user.id;
-    
     try {
         const result = await AttachmentModel.deleteAttachment(id, userId);
+        console.log('Attachment removal result:', result);
         
         // Lấy thông tin board để emit thông báo
         const boardQuery = await pool.query(
@@ -128,12 +129,73 @@ const remove = async (req, res) => {
         
         res.json({ message: 'Xóa tệp đính kèm thành công' });
     } catch (error) {
+        console.error('Error removing attachment:', error);
         res.status(400).json({ message: error.message });
     }
 };
 
+// Thêm vào AttachmentController
+const download = async (req, res) => {
+    const { id } = req.params;
+    const userId = req.user.id;
+    
+    try {
+        // Lấy thông tin attachment và kiểm tra quyền
+        const client = await pool.connect();
+        
+        const attachmentQuery = await client.query(
+            `SELECT ca.*, c.id as card_id 
+             FROM card_attachments ca
+             JOIN cards c ON ca.card_id = c.id
+             WHERE ca.id = $1 AND ca.is_deleted = false`,
+            [id]
+        );
+        
+        if (attachmentQuery.rows.length === 0) {
+            client.release();
+            return res.status(404).json({ message: 'Tệp đính kèm không tồn tại' });
+        }
+        
+        const attachment = attachmentQuery.rows[0];
+        
+        // Kiểm tra quyền truy cập
+        const permissionCheck = await client.query(
+            `SELECT bm.role FROM cards c
+            JOIN columns col ON c.column_id = col.id
+            JOIN boards b ON col.board_id = b.id
+            JOIN board_members bm ON b.id = bm.board_id
+            WHERE c.id = $1 AND bm.user_id = $2`,
+            [attachment.card_id, userId]
+        );
+        
+        client.release();
+        
+        if (permissionCheck.rows.length === 0) {
+            return res.status(403).json({ message: 'Không có quyền tải xuống tệp này' });
+        }
+        
+        // Kiểm tra file có tồn tại
+        if (!fs.existsSync(attachment.file_path)) {
+            return res.status(404).json({ message: 'Tệp không tồn tại trên server' });
+        }
+        
+        // Set headers và gửi file
+        res.setHeader('Content-Disposition', `attachment; filename="${attachment.file_name}"`);
+        res.setHeader('Content-Type', attachment.file_type || 'application/octet-stream');
+        
+        const fileStream = fs.createReadStream(attachment.file_path);
+        fileStream.pipe(res);
+        
+    } catch (error) {
+        console.error('Download error:', error);
+        res.status(500).json({ message: 'Lỗi server khi tải xuống tệp' });
+    }
+};
+
+// Cập nhật export
 export const AttachmentController = {
     upload,
     getAll,
-    remove
+    remove,
+    download
 };

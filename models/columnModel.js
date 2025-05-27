@@ -71,9 +71,24 @@ const getColumnsByBoardId = async (board_id, userId) => {
             `
             SELECT 
                 c.id, c.column_id, c.title, c.description, c.cover_img, c.position,
-                c.created_by, c.assigned_to, c.due_date, c.created_at
+                c.created_by, c.assigned_to, c.due_date, c.created_at,
+                c.status, c.priority_level, c.difficulty_level,
+                COALESCE(att_counts.count, 0) AS attachment_count,
+                COALESCE(com_counts.count, 0) AS comment_count
             FROM cards c
             JOIN columns col ON c.column_id = col.id
+            LEFT JOIN (
+                SELECT card_id, COUNT(*) as count 
+                FROM card_attachments 
+                WHERE is_deleted = false 
+                GROUP BY card_id
+            ) att_counts ON c.id = att_counts.card_id
+            LEFT JOIN (
+                SELECT card_id, COUNT(*) as count 
+                FROM card_comments 
+                WHERE is_deleted = false 
+                GROUP BY card_id
+            ) com_counts ON c.id = com_counts.card_id
             WHERE col.board_id = $1
             ORDER BY c.position, c.created_at
             `,
