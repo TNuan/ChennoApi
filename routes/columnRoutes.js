@@ -33,7 +33,7 @@ router.put(
     '/:id',
     authenticateToken,
     [
-        body('title').notEmpty().withMessage('Tên column là bắt buộc'),
+        // body('title').notEmpty().withMessage('Tên column là bắt buộc'),
         body('position').optional().isInt().withMessage('Position phải là số'),
     ],
     validate,

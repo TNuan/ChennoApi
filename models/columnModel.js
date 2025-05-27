@@ -70,7 +70,7 @@ const getColumnsByBoardId = async (board_id, userId) => {
         const cardsResult = await client.query(
             `
             SELECT 
-                c.id, c.column_id, c.title, c.description, c.position, 
+                c.id, c.column_id, c.title, c.description, c.cover_img, c.position,
                 c.created_by, c.assigned_to, c.due_date, c.created_at
             FROM cards c
             JOIN columns col ON c.column_id = col.id

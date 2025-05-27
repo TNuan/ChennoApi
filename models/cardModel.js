@@ -373,6 +373,8 @@ const updateCard = async (cardId, userId, {
         
         const card = cardQuery.rows[0];
         const boardId = card.board_id;
+        const oldColumnId = card.column_id;
+        const oldPosition = card.position;
         
         // Kiểm tra người dùng có phải là member của board không
         const memberCheck = await client.query(
@@ -435,10 +437,64 @@ const updateCard = async (cardId, userId, {
         if (difficulty_level !== undefined && difficulty_level !== card.difficulty_level) 
             changes.difficulty_level = { from: card.difficulty_level, to: difficulty_level };
         if (column_id && column_id !== card.column_id) changes.column_id = { from: card.column_id, to: column_id };
+        if (position !== undefined && position !== card.position) changes.position = { from: card.position, to: position };
         if (assigned_to !== undefined && assigned_to !== card.assigned_to) changes.assigned_to = { from: card.assigned_to, to: assigned_to };
         if (due_date && due_date !== card.due_date) changes.due_date = { from: card.due_date, to: due_date };
         if (resolved_at && resolved_at !== card.resolved_at) changes.resolved_at = { from: card.resolved_at, to: resolved_at };
         
+        // Xử lý cập nhật position khi có sự thay đổi về position hoặc column
+        if ((position !== undefined && position !== card.position) || (column_id && column_id !== card.column_id)) {
+            const newColumnId = column_id || card.column_id;
+            const newPosition = position !== undefined ? position : card.position;
+            
+            // TRƯỜNG HỢP 1: Di chuyển trong cùng một column
+            if (newColumnId === oldColumnId) {
+                if (newPosition < oldPosition) {
+                    // Di chuyển lên trên: Tăng position của các card từ newPosition đến oldPosition-1
+                    await client.query(
+                        `UPDATE cards 
+                         SET position = position + 1
+                         WHERE column_id = $1 
+                         AND id != $2
+                         AND position >= $3 
+                         AND position < $4`,
+                        [oldColumnId, cardId, newPosition, oldPosition]
+                    );
+                } else if (newPosition > oldPosition) {
+                    // Di chuyển xuống dưới: Giảm position của các card từ oldPosition+1 đến newPosition
+                    await client.query(
+                        `UPDATE cards 
+                         SET position = position - 1
+                         WHERE column_id = $1 
+                         AND id != $2
+                         AND position > $3 
+                         AND position <= $4`,
+                        [oldColumnId, cardId, oldPosition, newPosition]
+                    );
+                }
+            } 
+            // TRƯỜNG HỢP 2: Di chuyển từ column này sang column khác
+            else {
+                // Giảm position của các card có position lớn hơn card cũ trong column cũ
+                await client.query(
+                    `UPDATE cards 
+                     SET position = position - 1
+                     WHERE column_id = $1
+                     AND position > $2`,
+                    [oldColumnId, oldPosition]
+                );
+                
+                // Tăng position của các card có position lớn hơn hoặc bằng vị trí mới trong column mới
+                await client.query(
+                    `UPDATE cards 
+                     SET position = position + 1
+                     WHERE column_id = $1
+                     AND position >= $2`,
+                    [newColumnId, newPosition]
+                );
+            }
+        }
+
         // Cập nhật card
         const result = await client.query(
             `
@@ -449,7 +505,7 @@ const updateCard = async (cardId, userId, {
                 column_id = COALESCE($4, column_id), 
                 assigned_to = $5, 
                 due_date = $6,
-                cover_img = COALESCE($7, cover_img),
+                cover_img = $7,
                 status = COALESCE($8, status),
                 priority_level = COALESCE($9, priority_level),
                 difficulty_level = COALESCE($10, difficulty_level),

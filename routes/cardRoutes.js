@@ -38,7 +38,7 @@ router.put(
     '/:id',
     authenticateToken,
     [
-        body('title').notEmpty().withMessage('Tiêu đề card là bắt buộc'),
+        // body('title').optional().withMessage('Tiêu đề card là bắt buộc'),
         body('position').optional().isInt().withMessage('Position phải là số'),
         body('column_id').optional().isInt().withMessage('Column ID phải là số'),
         body('assigned_to').optional().isInt().withMessage('Người được giao phải là ID hợp lệ'),
