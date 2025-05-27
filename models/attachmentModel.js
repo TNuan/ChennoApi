@@ -1,4 +1,5 @@
 import pool from '../config/db.js';
+import fs from 'fs';
 
 // Thêm tệp đính kèm vào card
 const addAttachment = async ({ card_id, file_name, file_path, file_type, file_size, uploaded_by }) => {
@@ -89,18 +90,17 @@ const getCardAttachments = async (card_id, userId) => {
 const deleteAttachment = async (attachment_id, userId) => {
     const client = await pool.connect();
     try {
-        // Lấy thông tin card_id trước
-        const cardIdQuery = await client.query(
-            `SELECT card_id, file_name FROM card_attachments WHERE id = $1`,
+        // Lấy thông tin card_id và file_path trước
+        const attachmentQuery = await client.query(
+            `SELECT card_id, file_name, file_path FROM card_attachments WHERE id = $1`,
             [attachment_id]
         );
         
-        if (cardIdQuery.rows.length === 0) {
+        if (attachmentQuery.rows.length === 0) {
             throw new Error('Tệp đính kèm không tồn tại');
         }
         
-        const card_id = cardIdQuery.rows[0].card_id;
-        const file_name = cardIdQuery.rows[0].file_name;
+        const { card_id, file_name, file_path } = attachmentQuery.rows[0];
         
         // Kiểm tra quyền truy cập
         const permissionCheck = await client.query(
@@ -116,7 +116,7 @@ const deleteAttachment = async (attachment_id, userId) => {
             throw new Error('Không có quyền xóa tệp đính kèm này');
         }
 
-        // Thực hiện soft delete
+        // Thực hiện soft delete trong database
         await client.query(
             `UPDATE card_attachments SET is_deleted = true
             WHERE id = $1`,
@@ -132,6 +132,17 @@ const deleteAttachment = async (attachment_id, userId) => {
                 file_name 
             })]
         );
+        
+        // Xóa file vật lý nếu tồn tại
+        if (file_path && fs.existsSync(file_path)) {
+            fs.unlink(file_path, (err) => {
+                if (err) {
+                    console.error(`Error deleting file ${file_path}:`, err);
+                } else {
+                    console.log(`File ${file_path} deleted successfully`);
+                }
+            });
+        }
 
         return { card_id };
     } finally {

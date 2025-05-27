@@ -36,7 +36,7 @@ router.post('/',
     authenticateToken,
     upload.single('file'),
     [
-        body('card_id').isInt().withMessage('Card ID phải là số'),
+        body('card_id').isInt().withMessage('Card ID phải là số').toInt(),
     ],
     validate,
     AttachmentController.upload
@@ -46,7 +46,7 @@ router.post('/',
 router.get('/card/:card_id',
     authenticateToken,
     [
-        param('card_id').isInt().withMessage('Card ID phải là số')
+        param('card_id').isInt().withMessage('Card ID phải là số').toInt(),
     ],
     validate,
     AttachmentController.getAll
@@ -56,10 +56,20 @@ router.get('/card/:card_id',
 router.delete('/:id',
     authenticateToken,
     [
-        param('id').isInt().withMessage('Attachment ID phải là số'),
+        param('id').isInt().withMessage('Attachment ID phải là số').toInt(),
     ],
     validate,
     AttachmentController.remove
+);
+
+// Thêm route download
+router.get('/download/:id',
+    authenticateToken,
+    [
+        param('id').isInt().withMessage('Attachment ID phải là số').toInt(),
+    ],
+    validate,
+    AttachmentController.download
 );
 
 export default router;
