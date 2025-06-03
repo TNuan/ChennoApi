@@ -12,6 +12,8 @@ import pool from '../config/db.js';
  * @param {string} excludeUserId - ID của người dùng sẽ không nhận thông báo (thường là người thực hiện thay đổi)
  */
 export const emitBoardChange = (io, boardId, changeType, payload, excludeUserId) => {
+    console.log(`Emitting board change: ${changeType} for board ${boardId}, excluding user ${excludeUserId}`);
+    console.log('Payload:', payload);
     const excludeSocketId = getUserSocketId(io, excludeUserId);
     
     // Chỉ gửi đến các socket khác, không gửi đến người thay đổi
@@ -20,6 +22,7 @@ export const emitBoardChange = (io, boardId, changeType, payload, excludeUserId)
         io.in(`board:${boardId}`).except(excludeSocketId).emit('board_updated', {
             changeType,
             payload,
+            boardId,
             senderId: excludeUserId,
             senderSocketId: excludeSocketId
         });
@@ -28,6 +31,7 @@ export const emitBoardChange = (io, boardId, changeType, payload, excludeUserId)
         io.to(`board:${boardId}`).emit('board_updated', {
             changeType,
             payload,
+            boardId,
             senderId: excludeUserId
         });
     }
