@@ -335,11 +335,11 @@ const getCardDetails = async (cardId, userId) => {
                     email: activity.email
                 }
             })),
-            assigned_to: card.assigned_to ? {
-                id: card.assigned_to,
-                username: card.assigned_to_username,
-                email: card.assigned_to_email
-            } : null
+            // assigned_to: card.assigned_to ? {
+            //     id: card.assigned_to,
+            //     username: card.assigned_to_username,
+            //     email: card.assigned_to_email
+            // } : null
         };
 
         return cardDetails;
@@ -422,9 +422,9 @@ const updateCard = async (cardId, userId, {
                 throw new Error('Column không tồn tại');
             }
             
-            if (columnCheck.rows[0].board_id !== boardId) {
-                throw new Error('Không thể di chuyển card sang board khác');
-            }
+            // if (columnCheck.rows[0].board_id !== boardId) {
+            //     throw new Error('Không thể di chuyển card sang board khác');
+            // }
         }
 
         // Xác định các thay đổi để ghi log
@@ -496,7 +496,7 @@ const updateCard = async (cardId, userId, {
         }
 
         // Cập nhật card
-        const result = await client.query(
+        await client.query(
             `
             UPDATE cards
             SET title = COALESCE($1, title), 
@@ -512,7 +512,6 @@ const updateCard = async (cardId, userId, {
                 resolved_at = $11,
                 updated_at = CURRENT_TIMESTAMP
             WHERE id = $12
-            RETURNING *
             `,
             [
                 title, 
@@ -530,7 +529,7 @@ const updateCard = async (cardId, userId, {
             ]
         );
 
-        // Ghi lại hoạt động cập nhật
+        // Ghi lại hoạt động cập nhật nếu có thay đổi
         if (Object.keys(changes).length > 0) {
             await client.query(
                 `INSERT INTO card_activities 
@@ -545,7 +544,55 @@ const updateCard = async (cardId, userId, {
             );
         }
 
+        // Lấy lại thông tin card đã cập nhật kèm theo các dữ liệu phụ trợ
+        const result = await client.query(
+            `
+            SELECT c.id, c.column_id, c.title, c.description, c.position,
+                c.created_by, c.assigned_to, c.due_date, c.created_at,
+                c.cover_img, c.updated_at, c.resolved_at, c.status,
+                c.priority_level, c.difficulty_level,
+                u.username as created_by_username,
+                au.username as assigned_to_username,
+                col.board_id,
+                b.name as board_name,
+                COALESCE(att_counts.count, 0) AS attachment_count,
+                COALESCE(com_counts.count, 0) AS comment_count,
+                (
+                    SELECT json_agg(
+                        json_build_object(
+                            'id', l.id,
+                            'name', l.name,
+                            'color', l.color
+                        )
+                    )
+                    FROM card_labels cl
+                    JOIN labels l ON cl.label_id = l.id
+                    WHERE cl.card_id = c.id
+                ) as labels
+            FROM cards c
+            JOIN columns col ON c.column_id = col.id
+            JOIN boards b ON col.board_id = b.id
+            LEFT JOIN users u ON c.created_by = u.id
+            LEFT JOIN users au ON c.assigned_to = au.id
+            LEFT JOIN (
+                SELECT card_id, COUNT(*) as count 
+                FROM card_attachments 
+                WHERE is_deleted = false 
+                GROUP BY card_id
+            ) att_counts ON c.id = att_counts.card_id
+            LEFT JOIN (
+                SELECT card_id, COUNT(*) as count 
+                FROM card_comments 
+                WHERE is_deleted = false 
+                GROUP BY card_id
+            ) com_counts ON c.id = com_counts.card_id
+            WHERE c.id = $1
+            `,
+            [cardId]
+        );
+
         await client.query('COMMIT');
+        
         return result.rows[0];
     } catch (err) {
         await client.query('ROLLBACK');

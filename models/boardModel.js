@@ -316,7 +316,8 @@ const getAllBoardsByUserId = async (userId) => {
                         'updated_at', b.updated_at,
                         'cover_img', b.cover_img,
                         'is_favorite', (bf.id IS NOT NULL),
-                        'viewed_at', bv.viewed_at
+                        'viewed_at', bv.viewed_at,
+                        'role', bm.role
                     ) ORDER BY b.created_at DESC
                 ) FILTER (WHERE b.id IS NOT NULL AND (b.visibility = 1 OR bm.user_id = $1)),
                 '[]'

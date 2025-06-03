@@ -66,7 +66,7 @@ const getColumnsByBoardId = async (board_id, userId) => {
             return [];
         }
         
-        // Lấy tất cả cards cho các columns trong board này
+        // Lấy tất cả cards cho các columns trong board này, bao gồm thông tin về attachments và comments
         const cardsResult = await client.query(
             `
             SELECT 
@@ -95,9 +95,39 @@ const getColumnsByBoardId = async (board_id, userId) => {
             [board_id]
         );
         
+        // Lấy thông tin labels cho tất cả cards trong board
+        const labelsResult = await client.query(
+            `
+            SELECT cl.card_id, l.id, l.name, l.color
+            FROM card_labels cl
+            JOIN labels l ON cl.label_id = l.id
+            JOIN cards c ON cl.card_id = c.id
+            JOIN columns col ON c.column_id = col.id
+            WHERE col.board_id = $1
+            `,
+            [board_id]
+        );
+        
+        // Map labels vào từng card dựa theo card_id
+        const labelsByCard = {};
+        labelsResult.rows.forEach(label => {
+            if (!labelsByCard[label.card_id]) {
+                labelsByCard[label.card_id] = [];
+            }
+            // Chỉ lấy những thông tin cần thiết của label
+            labelsByCard[label.card_id].push({
+                id: label.id,
+                name: label.name,
+                color: label.color
+            });
+        });
+        
         // Tạo map chứa các cards theo column_id
         const cardsByColumn = {};
         cardsResult.rows.forEach(card => {
+            // Thêm labels vào card
+            card.labels = labelsByCard[card.id] || [];
+            
             if (!cardsByColumn[card.column_id]) {
                 cardsByColumn[card.column_id] = [];
             }

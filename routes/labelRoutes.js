@@ -1,5 +1,5 @@
 import express from 'express';
-import { body, param } from 'express-validator';
+import { body, param, validationResult } from 'express-validator';
 import authenticateToken from '../middleware/authMiddleware.js';
 import { LabelController } from '../controllers/labelController.js';
 

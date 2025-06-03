@@ -97,8 +97,42 @@ const update = async (req, res) => {
     const userId = req.user.id;
 
     try {
-        console.log('Updating card with ID:', id);
-        console.log('Request body:', cover_img);
+        // Nếu có column_id mới, có thể là đang di chuyển card sang column khác
+        let isMovingCard = false;
+        let oldColumnId = null;
+        let oldBoardId = null;
+        let newBoardId = null;
+        
+        if (column_id) {
+            // Kiểm tra xem column_id có thay đổi không và lấy board_id cũ
+            const cardQuery = await pool.query(
+                `SELECT c.column_id, b.id as board_id 
+                 FROM cards c
+                 JOIN columns col ON c.column_id = col.id
+                 JOIN boards b ON col.board_id = b.id
+                 WHERE c.id = $1`,
+                [id]
+            );
+            
+            if (cardQuery.rows.length > 0) {
+                oldColumnId = cardQuery.rows[0].column_id;
+                oldBoardId = cardQuery.rows[0].board_id;
+                isMovingCard = (oldColumnId != column_id);
+                
+                // Nếu đang di chuyển card, lấy board_id mới
+                if (isMovingCard) {
+                    const newColumnQuery = await pool.query(
+                        `SELECT board_id FROM columns WHERE id = $1`,
+                        [column_id]
+                    );
+                    
+                    if (newColumnQuery.rows.length > 0) {
+                        newBoardId = newColumnQuery.rows[0].board_id;
+                    }
+                }
+            }
+        }
+
         const card = await CardModel.updateCard(id, userId, { 
             title, description, position, column_id, assigned_to, due_date,
             cover_img, status, priority_level, difficulty_level, resolved_at
@@ -108,8 +142,8 @@ const update = async (req, res) => {
             return res.status(403).json({ message: 'Card không tồn tại hoặc bạn không có quyền cập nhật' });
         }
         
-        // Lấy thông tin board_id để emit thông báo
-        const boardQuery = await pool.query(
+        // Lấy thông tin board_id mới sau khi cập nhật
+        const currentBoardQuery = await pool.query(
             `SELECT b.id FROM boards b
              JOIN columns c ON b.id = c.board_id
              JOIN cards card ON c.id = card.column_id
@@ -117,10 +151,36 @@ const update = async (req, res) => {
             [id]
         );
         
-        const boardId = boardQuery.rows[0]?.id;
+        const currentBoardId = currentBoardQuery.rows[0]?.id;
         
-        if (boardId && socketIO) {
-            emitBoardChange(socketIO, boardId, 'card_update', card, userId);
+        if (socketIO) {
+            // Trường hợp di chuyển card giữa các board khác nhau
+            if (isMovingCard && oldBoardId && newBoardId && oldBoardId !== newBoardId) {
+                console.log(`Di chuyển card ${id} từ board ${oldBoardId} sang board ${newBoardId}`);
+
+                // Emit sự kiện xóa card ở board cũ
+                emitBoardChange(socketIO, oldBoardId, 'card_remove', { 
+                    card_id: id, 
+                    column_id: oldColumnId 
+                }, userId);
+                
+                // Emit sự kiện thêm card mới ở board mới
+                emitBoardChange(socketIO, newBoardId, 'card_created', card, userId);
+            } 
+            // Trường hợp di chuyển trong cùng một board hoặc cập nhật card thông thường
+            else if (currentBoardId) {
+                if (isMovingCard) {
+                    // Emit sự kiện card_moved nếu card đã được di chuyển giữa các columns
+                    emitBoardChange(socketIO, currentBoardId, 'card_moved', { 
+                        card, 
+                        from_column_id: oldColumnId,
+                        to_column_id: column_id
+                    }, userId);
+                } else {
+                    // Emit sự kiện card_updated thông thường
+                    emitBoardChange(socketIO, currentBoardId, 'card_updated', card, userId);
+                }
+            }
         }
         
         res.json({ message: 'Cập nhật card thành công', card });
