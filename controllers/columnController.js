@@ -3,19 +3,40 @@ import { socketIO } from '../index.js';
 import { emitBoardChange } from '../services/socketService.js';
 
 const create = async (req, res) => {
-    const { board_id, title } = req.body;
-    const created_by = req.user.id;
-
-    try {
-        const column = await ColumnModel.createColumn({ board_id, title, created_by });
-
-        // Thông báo cho tất cả người dùng trong board về column mới
-        emitBoardChange(socketIO, board_id, 'add_column', column, created_by);
-
-        res.status(201).json({ message: 'Tạo column thành công', column });
-    } catch (err) {
-        res.status(400).json({ message: err.message });
+  try {
+    const userId = req.user.id;
+    const { title, board_id } = req.body;
+    
+    if (!title || !board_id) {
+      return res.status(400).json({ error: 'Title và board_id là bắt buộc' });
     }
+    
+    const newColumn = await ColumnModel.createColumn({
+      title,
+      board_id,
+      created_by: userId
+    });
+    
+    // Đảm bảo column trả về có thuộc tính cards
+    const columnWithCards = {
+      ...newColumn,
+      cards: [] // Luôn khởi tạo cards array rỗng
+    };
+    
+    res.status(201).json({ 
+      message: 'Tạo column thành công', 
+      column: columnWithCards 
+    });
+
+    // Emit socket event với column đã có cards array
+    if (board_id && socketIO) {
+      emitBoardChange(socketIO, board_id, 'column_add', columnWithCards, userId);
+    }
+    
+  } catch (error) {
+    console.error('Column creation error:', error);
+    res.status(400).json({ error: error.message });
+  }
 };
 
 const getAll = async (req, res) => {
