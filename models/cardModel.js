@@ -662,6 +662,230 @@ const deleteCard = async (cardId, userId) => {
     }
 };
 
+const copyCard = async (cardId, targetColumnId, userId, options = {}) => {
+    const client = await pool.connect();
+    try {
+        await client.query('BEGIN');
+
+        // Lấy thông tin card gốc
+        const originalCardQuery = await client.query(
+            `SELECT c.*, col.board_id as source_board_id
+             FROM cards c
+             JOIN columns col ON c.column_id = col.id
+             WHERE c.id = $1`,
+            [cardId]
+        );
+
+        if (originalCardQuery.rows.length === 0) {
+            throw new Error('Card không tồn tại');
+        }
+
+        const originalCard = originalCardQuery.rows[0];
+
+        // Kiểm tra quyền truy cập card gốc
+        const sourcePermissionCheck = await client.query(
+            `SELECT bm.role FROM board_members bm
+             WHERE bm.board_id = $1 AND bm.user_id = $2`,
+            [originalCard.source_board_id, userId]
+        );
+
+        if (sourcePermissionCheck.rows.length === 0) {
+            throw new Error('Bạn không có quyền copy card này');
+        }
+
+        // Lấy thông tin target column và kiểm tra quyền
+        const targetColumnQuery = await client.query(
+            `SELECT board_id FROM columns WHERE id = $1`,
+            [targetColumnId]
+        );
+
+        if (targetColumnQuery.rows.length === 0) {
+            throw new Error('Column đích không tồn tại');
+        }
+
+        const targetBoardId = targetColumnQuery.rows[0].board_id;
+
+        // Kiểm tra quyền truy cập board đích
+        const targetPermissionCheck = await client.query(
+            `SELECT bm.role FROM board_members bm
+             WHERE bm.board_id = $1 AND bm.user_id = $2`,
+            [targetBoardId, userId]
+        );
+
+        if (targetPermissionCheck.rows.length === 0) {
+            throw new Error('Bạn không có quyền tạo card trong board này');
+        }
+
+        // Tính position mới
+        const positionResult = await client.query(
+            `SELECT COALESCE(MAX(position) + 1, 0) as next_position 
+             FROM cards 
+             WHERE column_id = $1`,
+            [targetColumnId]
+        );
+        const newPosition = positionResult.rows[0].next_position;
+
+        // Tạo card mới (không copy comment và assignee)
+        const newCardResult = await client.query(
+            `INSERT INTO cards 
+             (column_id, title, description, position, created_by, due_date, 
+              cover_img, status, priority_level, difficulty_level) 
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) 
+             RETURNING *`,
+            [
+                targetColumnId,
+                `${originalCard.title} (Copy)`,
+                originalCard.description,
+                newPosition,
+                userId, // Người copy trở thành creator
+                originalCard.due_date,
+                originalCard.cover_img,
+                originalCard.status,
+                originalCard.priority_level,
+                originalCard.difficulty_level
+            ]
+        );
+
+        const newCard = newCardResult.rows[0];
+
+        // Copy labels nếu được yêu cầu
+        if (options.copyLabels) {
+            // Lấy labels của card gốc
+            const originalLabelsQuery = await client.query(
+                `SELECT l.* FROM labels l
+                 JOIN card_labels cl ON l.id = cl.label_id
+                 WHERE cl.card_id = $1`,
+                [cardId]
+            );
+
+            for (const originalLabel of originalLabelsQuery.rows) {
+                let labelId = originalLabel.id;
+
+                // Nếu copy sang board khác, cần tạo label mới
+                if (originalCard.source_board_id !== targetBoardId) {
+                    // Kiểm tra xem label cùng tên và màu đã tồn tại chưa
+                    const existingLabelQuery = await client.query(
+                        `SELECT id FROM labels 
+                         WHERE board_id = $1 AND name = $2 AND color = $3`,
+                        [targetBoardId, originalLabel.name, originalLabel.color]
+                    );
+
+                    if (existingLabelQuery.rows.length > 0) {
+                        labelId = existingLabelQuery.rows[0].id;
+                    } else {
+                        // Tạo label mới
+                        const newLabelResult = await client.query(
+                            `INSERT INTO labels (board_id, name, color, created_by)
+                             VALUES ($1, $2, $3, $4)
+                             RETURNING id`,
+                            [targetBoardId, originalLabel.name, originalLabel.color, userId]
+                        );
+                        labelId = newLabelResult.rows[0].id;
+                    }
+                }
+
+                // Gán label cho card mới
+                await client.query(
+                    `INSERT INTO card_labels (card_id, label_id, added_by)
+                     VALUES ($1, $2, $3)
+                     ON CONFLICT (card_id, label_id) DO NOTHING`,
+                    [newCard.id, labelId, userId]
+                );
+            }
+        }
+
+        // Copy attachments nếu được yêu cầu
+        if (options.copyAttachments) {
+            const originalAttachmentsQuery = await client.query(
+                `SELECT * FROM card_attachments 
+                 WHERE card_id = $1 AND is_deleted = false`,
+                [cardId]
+            );
+
+            for (const originalAttachment of originalAttachmentsQuery.rows) {
+                // Tạo attachment mới (tạo bản ghi mới, không copy file vật lý)
+                await client.query(
+                    `INSERT INTO card_attachments 
+                     (card_id, file_name, file_path, file_type, file_size, uploaded_by)
+                     VALUES ($1, $2, $3, $4, $5, $6)`,
+                    [
+                        newCard.id,
+                        originalAttachment.file_name,
+                        originalAttachment.file_path, // Giữ nguyên đường dẫn file
+                        originalAttachment.file_type,
+                        originalAttachment.file_size,
+                        userId // Người copy trở thành uploader
+                    ]
+                );
+            }
+        }
+
+        // Ghi lại hoạt động
+        await client.query(
+            `INSERT INTO card_activities 
+             (card_id, user_id, activity_type, activity_data) 
+             VALUES ($1, $2, $3, $4)`,
+            [
+                newCard.id,
+                userId,
+                'copied',
+                JSON.stringify({ 
+                    original_card_id: cardId,
+                    options: options
+                })
+            ]
+        );
+
+        await client.query('COMMIT');
+
+        // Lấy lại card với đầy đủ thông tin
+        const finalCardQuery = await client.query(
+            `SELECT c.*, 
+             u.username as created_by_username,
+             col.board_id,
+             COALESCE(att_counts.count, 0) AS attachment_count,
+             COALESCE(com_counts.count, 0) AS comment_count,
+             (
+                 SELECT json_agg(
+                     json_build_object(
+                         'id', l.id,
+                         'name', l.name,
+                         'color', l.color
+                     )
+                 )
+                 FROM card_labels cl
+                 JOIN labels l ON cl.label_id = l.id
+                 WHERE cl.card_id = c.id
+             ) as labels
+             FROM cards c
+             JOIN columns col ON c.column_id = col.id
+             LEFT JOIN users u ON c.created_by = u.id
+             LEFT JOIN (
+                 SELECT card_id, COUNT(*) as count 
+                 FROM card_attachments 
+                 WHERE is_deleted = false 
+                 GROUP BY card_id
+             ) att_counts ON c.id = att_counts.card_id
+             LEFT JOIN (
+                 SELECT card_id, COUNT(*) as count 
+                 FROM card_comments 
+                 WHERE is_deleted = false 
+                 GROUP BY card_id
+             ) com_counts ON c.id = com_counts.card_id
+             WHERE c.id = $1`,
+            [newCard.id]
+        );
+
+        return finalCardQuery.rows[0];
+
+    } catch (err) {
+        await client.query('ROLLBACK');
+        throw err;
+    } finally {
+        client.release();
+    }
+};
+
 export const CardModel = {
     createCard,
     getCardsByColumnId,
@@ -669,4 +893,5 @@ export const CardModel = {
     getCardDetails,
     updateCard,
     deleteCard,
+    copyCard, // Thêm function mới
 };

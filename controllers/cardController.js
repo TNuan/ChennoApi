@@ -223,6 +223,48 @@ const remove = async (req, res) => {
     }
 };
 
+const copyCard = async (req, res) => {
+    const { id } = req.params; // Card ID cần copy
+    const { target_column_id, copy_labels = false, copy_attachments = false } = req.body;
+    const userId = req.user.id;
+
+    try {
+        if (!target_column_id) {
+            return res.status(400).json({ error: 'Target column ID là bắt buộc' });
+        }
+
+        const options = {
+            copyLabels: Boolean(copy_labels),
+            copyAttachments: Boolean(copy_attachments)
+        };
+
+        const newCard = await CardModel.copyCard(id, target_column_id, userId, options);
+
+        // Lấy thông tin board_id để emit thông báo
+        const boardQuery = await pool.query(
+            `SELECT b.id FROM boards b
+             JOIN columns c ON b.id = c.board_id
+             WHERE c.id = $1`,
+            [target_column_id]
+        );
+
+        const boardId = boardQuery.rows[0]?.id;
+
+        if (boardId && socketIO) {
+            emitBoardChange(socketIO, boardId, 'card_created', newCard, userId);
+        }
+
+        res.status(201).json({ 
+            message: 'Copy card thành công', 
+            card: newCard 
+        });
+
+    } catch (error) {
+        console.error('Card copy error:', error);
+        res.status(400).json({ error: error.message });
+    }
+};
+
 export const CardController = {
     create,
     getAll,
@@ -230,4 +272,5 @@ export const CardController = {
     getCardDetails,
     update,
     remove,
+    copyCard, // Thêm function mới
 };

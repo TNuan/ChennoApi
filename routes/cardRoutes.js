@@ -46,4 +46,17 @@ router.put(
 
 router.delete('/:id', authenticateToken, CardController.remove);
 
+// Thêm route copy card
+router.post(
+    '/copy/:id',
+    authenticateToken,
+    [
+        body('target_column_id').isInt().withMessage('Target column ID phải là số'),
+        body('copy_labels').optional().isBoolean().withMessage('Copy labels phải là boolean'),
+        body('copy_attachments').optional().isBoolean().withMessage('Copy attachments phải là boolean'),
+    ],
+    validate,
+    CardController.copyCard
+);
+
 export default router;
