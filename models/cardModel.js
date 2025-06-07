@@ -113,13 +113,13 @@ const getCardsByColumnId = async (column_id, userId) => {
         throw new Error('Bạn không có quyền xem các card trong column này');
     }
     
-    // Tiếp tục lấy dữ liệu...
+    // Tiếp tục lấy dữ liệu... (chỉ lấy cards chưa bị archive)
     const result = await pool.query(
         `
         SELECT c.id, c.column_id, c.title, c.description, c.position, 
                c.created_by, c.assigned_to, c.due_date, c.created_at,
                c.cover_img, c.updated_at, c.resolved_at, c.status,
-               c.priority_level, c.difficulty_level,
+               c.priority_level, c.difficulty_level, c.is_archived,
                u.username as created_by_name,
                au.username as assigned_to_name,
                (SELECT COUNT(*) FROM card_attachments WHERE card_id = c.id AND is_deleted = false) as attachment_count,
@@ -132,7 +132,7 @@ const getCardsByColumnId = async (column_id, userId) => {
         JOIN columns col ON c.column_id = col.id
         JOIN users u ON c.created_by = u.id
         LEFT JOIN users au ON c.assigned_to = au.id
-        WHERE c.column_id = $1
+        WHERE c.column_id = $1 AND c.is_archived = FALSE
         ORDER BY c.position, c.created_at
         `,
         [column_id]
@@ -886,6 +886,213 @@ const copyCard = async (cardId, targetColumnId, userId, options = {}) => {
     }
 };
 
+const archiveCard = async (cardId, userId) => {
+    const client = await pool.connect();
+    try {
+        await client.query('BEGIN');
+
+        // Lấy thông tin card và kiểm tra quyền
+        const cardQuery = await client.query(
+            `SELECT c.*, col.board_id
+             FROM cards c
+             JOIN columns col ON c.column_id = col.id
+             WHERE c.id = $1`,
+            [cardId]
+        );
+        
+        if (cardQuery.rows.length === 0) {
+            throw new Error('Card không tồn tại');
+        }
+        
+        const card = cardQuery.rows[0];
+        const boardId = card.board_id;
+        
+        // Kiểm tra card đã được archive chưa
+        if (card.is_archived) {
+            throw new Error('Card đã được archive');
+        }
+        
+        // Kiểm tra người dùng có phải là member của board không
+        const memberCheck = await client.query(
+            `SELECT role FROM board_members
+             WHERE board_id = $1 AND user_id = $2`,
+            [boardId, userId]
+        );
+        
+        if (memberCheck.rows.length === 0) {
+            throw new Error('Bạn không phải là thành viên của board');
+        }
+        
+        // Kiểm tra quyền archive dựa trên vai trò
+        const isAdmin = memberCheck.rows[0].role === 'admin' || memberCheck.rows[0].role === 'owner';
+        const isCreator = card.created_by === userId;
+        
+        if (!isAdmin && !isCreator) {
+            throw new Error('Bạn không có quyền archive card này');
+        }
+
+        // Archive card
+        const result = await client.query(
+            `UPDATE cards 
+             SET is_archived = TRUE, 
+                 archived_at = CURRENT_TIMESTAMP,
+                 archived_by = $2,
+                 updated_at = CURRENT_TIMESTAMP
+             WHERE id = $1 
+             RETURNING *`,
+            [cardId, userId]
+        );
+
+        // Ghi lại hoạt động archive
+        await client.query(
+            `INSERT INTO card_activities 
+             (card_id, user_id, activity_type, activity_data) 
+             VALUES ($1, $2, $3, $4)`,
+            [
+                cardId,
+                userId,
+                'archived',
+                JSON.stringify({ 
+                    archived_at: new Date().toISOString()
+                })
+            ]
+        );
+
+        await client.query('COMMIT');
+        
+        return {
+            ...result.rows[0],
+            board_id: boardId
+        };
+    } catch (err) {
+        await client.query('ROLLBACK');
+        throw err;
+    } finally {
+        client.release();
+    }
+};
+
+const unarchiveCard = async (cardId, userId) => {
+    const client = await pool.connect();
+    try {
+        await client.query('BEGIN');
+
+        // Lấy thông tin card và kiểm tra quyền
+        const cardQuery = await client.query(
+            `SELECT c.*, col.board_id
+             FROM cards c
+             JOIN columns col ON c.column_id = col.id
+             WHERE c.id = $1`,
+            [cardId]
+        );
+        
+        if (cardQuery.rows.length === 0) {
+            throw new Error('Card không tồn tại');
+        }
+        
+        const card = cardQuery.rows[0];
+        const boardId = card.board_id;
+        
+        // Kiểm tra card có được archive không
+        if (!card.is_archived) {
+            throw new Error('Card chưa được archive');
+        }
+        
+        // Kiểm tra người dùng có phải là member của board không
+        const memberCheck = await client.query(
+            `SELECT role FROM board_members
+             WHERE board_id = $1 AND user_id = $2`,
+            [boardId, userId]
+        );
+        
+        if (memberCheck.rows.length === 0) {
+            throw new Error('Bạn không phải là thành viên của board');
+        }
+        
+        // Kiểm tra quyền unarchive dựa trên vai trò
+        const isAdmin = memberCheck.rows[0].role === 'admin' || memberCheck.rows[0].role === 'owner';
+        const isCreator = card.created_by === userId;
+        
+        if (!isAdmin && !isCreator) {
+            throw new Error('Bạn không có quyền unarchive card này');
+        }
+
+        // Unarchive card
+        const result = await client.query(
+            `UPDATE cards 
+             SET is_archived = FALSE, 
+                 archived_at = NULL,
+                 archived_by = NULL,
+                 updated_at = CURRENT_TIMESTAMP
+             WHERE id = $1 
+             RETURNING *`,
+            [cardId]
+        );
+
+        // Ghi lại hoạt động unarchive
+        await client.query(
+            `INSERT INTO card_activities 
+             (card_id, user_id, activity_type, activity_data) 
+             VALUES ($1, $2, $3, $4)`,
+            [
+                cardId,
+                userId,
+                'unarchived',
+                JSON.stringify({ 
+                    unarchived_at: new Date().toISOString()
+                })
+            ]
+        );
+
+        await client.query('COMMIT');
+        
+        // Lấy lại card với đầy đủ thông tin
+        const finalCardQuery = await client.query(
+            `SELECT c.*, 
+             u.username as created_by_username,
+             col.board_id,
+             COALESCE(att_counts.count, 0) AS attachment_count,
+             COALESCE(com_counts.count, 0) AS comment_count,
+             (
+                 SELECT json_agg(
+                     json_build_object(
+                         'id', l.id,
+                         'name', l.name,
+                         'color', l.color
+                     )
+                 )
+                 FROM card_labels cl
+                 JOIN labels l ON cl.label_id = l.id
+                 WHERE cl.card_id = c.id
+             ) as labels
+             FROM cards c
+             JOIN columns col ON c.column_id = col.id
+             LEFT JOIN users u ON c.created_by = u.id
+             LEFT JOIN (
+                 SELECT card_id, COUNT(*) as count 
+                 FROM card_attachments 
+                 WHERE is_deleted = false 
+                 GROUP BY card_id
+             ) att_counts ON c.id = att_counts.card_id
+             LEFT JOIN (
+                 SELECT card_id, COUNT(*) as count 
+                 FROM card_comments 
+                 WHERE is_deleted = false 
+                 GROUP BY card_id
+             ) com_counts ON c.id = com_counts.card_id
+             WHERE c.id = $1`,
+            [cardId]
+        );
+
+        return finalCardQuery.rows[0];
+    } catch (err) {
+        await client.query('ROLLBACK');
+        throw err;
+    } finally {
+        client.release();
+    }
+};
+
 export const CardModel = {
     createCard,
     getCardsByColumnId,
@@ -893,5 +1100,7 @@ export const CardModel = {
     getCardDetails,
     updateCard,
     deleteCard,
-    copyCard, // Thêm function mới
+    copyCard,
+    archiveCard,     // Thêm function mới
+    unarchiveCard,   // Thêm function mới
 };

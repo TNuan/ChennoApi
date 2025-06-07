@@ -59,4 +59,10 @@ router.post(
     CardController.copyCard
 );
 
+// Archive card
+router.patch('/:id/archive', authenticateToken, CardController.archiveCard);
+
+// Unarchive card
+router.patch('/:id/unarchive', authenticateToken, CardController.unarchiveCard);
+
 export default router;

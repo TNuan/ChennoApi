@@ -265,6 +265,53 @@ const copyCard = async (req, res) => {
     }
 };
 
+const archiveCard = async (req, res) => {
+    const { id } = req.params;
+    const userId = req.user.id;
+
+    try {
+        const archivedCard = await CardModel.archiveCard(id, userId);
+        
+        // Emit socket event cho real-time update
+        if (archivedCard.board_id && socketIO) {
+            emitBoardChange(socketIO, archivedCard.board_id, 'card_archived', {
+                card_id: parseInt(id),
+                column_id: archivedCard.column_id
+            }, userId);
+        }
+        
+        res.json({ 
+            message: 'Archive card thành công',
+            card: archivedCard
+        });
+    } catch (error) {
+        console.error('Card archive error:', error);
+        res.status(400).json({ error: error.message });
+    }
+};
+
+const unarchiveCard = async (req, res) => {
+    const { id } = req.params;
+    const userId = req.user.id;
+
+    try {
+        const unarchivedCard = await CardModel.unarchiveCard(id, userId);
+        
+        // Emit socket event cho real-time update
+        if (unarchivedCard.board_id && socketIO) {
+            emitBoardChange(socketIO, unarchivedCard.board_id, 'card_unarchived', unarchivedCard, userId);
+        }
+        
+        res.json({ 
+            message: 'Unarchive card thành công',
+            card: unarchivedCard
+        });
+    } catch (error) {
+        console.error('Card unarchive error:', error);
+        res.status(400).json({ error: error.message });
+    }
+};
+
 export const CardController = {
     create,
     getAll,
@@ -272,5 +319,7 @@ export const CardController = {
     getCardDetails,
     update,
     remove,
-    copyCard, // Thêm function mới
+    copyCard,
+    archiveCard,     // Thêm function mới
+    unarchiveCard,   // Thêm function mới
 };
