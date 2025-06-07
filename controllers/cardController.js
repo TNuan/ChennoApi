@@ -1,6 +1,7 @@
 import { CardModel } from '../models/cardModel.js';
-import { socketIO } from '../index.js'; // Để dùng socket.io
+import { socketIO } from '../index.js';
 import { emitBoardChange } from '../services/socketService.js';
+import { NotificationService } from '../services/notificationService.js';
 import pool from '../config/db.js';
 
 const create = async (req, res) => {
@@ -97,6 +98,20 @@ const update = async (req, res) => {
     const userId = req.user.id;
 
     try {
+        // Lấy thông tin card cũ trước khi update để so sánh thay đổi
+        const oldCardQuery = await pool.query(
+            `SELECT c.*, col.board_id
+             FROM cards c
+             JOIN columns col ON c.column_id = col.id
+             WHERE c.id = $1`,
+            [id]
+        );
+
+        const oldCard = oldCardQuery.rows[0];
+        if (!oldCard) {
+            return res.status(404).json({ message: 'Card không tồn tại' });
+        }
+
         // Nếu có column_id mới, có thể là đang di chuyển card sang column khác
         let isMovingCard = false;
         let oldColumnId = null;
@@ -141,7 +156,12 @@ const update = async (req, res) => {
         if (!card) {
             return res.status(403).json({ message: 'Card không tồn tại hoặc bạn không có quyền cập nhật' });
         }
-        
+
+        // Gửi notifications cho watchers nếu có thay đổi quan trọng
+        await sendCardWatcherNotifications(id, userId, oldCard, {
+            title, description, assigned_to, due_date, status
+        });
+
         // Lấy thông tin board_id mới sau khi cập nhật
         const currentBoardQuery = await pool.query(
             `SELECT b.id FROM boards b
@@ -186,6 +206,75 @@ const update = async (req, res) => {
         res.json({ message: 'Cập nhật card thành công', card });
     } catch (err) {
         res.status(400).json({ message: err.message });
+    }
+};
+
+// Helper function để gửi notifications cho watchers - OPTIMIZED
+const sendCardWatcherNotifications = async (cardId, actorUserId, oldCard, updateData) => {
+    try {
+        // Lấy thông tin actor
+        const actorQuery = await pool.query(
+            `SELECT username FROM users WHERE id = $1`,
+            [actorUserId]
+        );
+
+        if (actorQuery.rows.length === 0) return;
+
+        const actorUsername = actorQuery.rows[0].username;
+
+        // Lấy danh sách watchers (trừ người thực hiện)
+        const watchersQuery = await pool.query(
+            `SELECT user_id FROM card_watchers
+             WHERE card_id = $1 AND user_id != $2`,
+            [cardId, actorUserId]
+        );
+
+        if (watchersQuery.rows.length === 0) return;
+
+        // Xác định các thay đổi quan trọng
+        const changes = {};
+        const watchableFields = ['title', 'description', 'assigned_to', 'due_date', 'status'];
+        
+        for (const field of watchableFields) {
+            if (updateData[field] !== undefined && updateData[field] !== oldCard[field]) {
+                changes[field] = { 
+                    from: oldCard[field], 
+                    to: updateData[field] 
+                };
+            }
+        }
+
+        if (Object.keys(changes).length === 0) return;
+
+        // Tạo message mô tả thay đổi
+        const changesList = Object.keys(changes).map(field => {
+            switch (field) {
+                case 'title': return 'title';
+                case 'description': return 'description';
+                case 'assigned_to': return 'assignee';
+                case 'due_date': return 'due date';
+                case 'status': return 'status';
+                default: return field;
+            }
+        }).join(', ');
+
+        const message = `${actorUsername} updated ${changesList} on card "${oldCard.title}"`;
+        const title = 'Card Updated';
+
+        // Sử dụng bulk notification thay vì vòng lặp
+        await NotificationService.createAndSendBulkNotifications({
+            sender_id: actorUserId,
+            receiver_ids: watchersQuery.rows.map(watcher => watcher.user_id),
+            title: title,
+            content: message,
+            type: 'card_watch',
+            entity_type: 'card',
+            entity_id: cardId
+        });
+
+    } catch (error) {
+        console.error('Error sending watcher notifications:', error);
+        // Không throw error để không ảnh hưởng đến update card chính
     }
 };
 
@@ -265,6 +354,87 @@ const copyCard = async (req, res) => {
     }
 };
 
+const archiveCard = async (req, res) => {
+    const { id } = req.params;
+    const userId = req.user.id;
+
+    try {
+        const archivedCard = await CardModel.archiveCard(id, userId);
+        
+        // Emit socket event cho real-time update
+        if (archivedCard.board_id && socketIO) {
+            emitBoardChange(socketIO, archivedCard.board_id, 'card_archived', {
+                card_id: parseInt(id),
+                column_id: archivedCard.column_id
+            }, userId);
+        }
+        
+        res.json({ 
+            message: 'Archive card thành công',
+            card: archivedCard
+        });
+    } catch (error) {
+        console.error('Card archive error:', error);
+        res.status(400).json({ error: error.message });
+    }
+};
+
+const unarchiveCard = async (req, res) => {
+    const { id } = req.params;
+    const userId = req.user.id;
+
+    try {
+        const unarchivedCard = await CardModel.unarchiveCard(id, userId);
+        
+        // Emit socket event cho real-time update
+        if (unarchivedCard.board_id && socketIO) {
+            emitBoardChange(socketIO, unarchivedCard.board_id, 'card_unarchived', unarchivedCard, userId);
+        }
+        
+        res.json({ 
+            message: 'Unarchive card thành công',
+            card: unarchivedCard
+        });
+    } catch (error) {
+        console.error('Card unarchive error:', error);
+        res.status(400).json({ error: error.message });
+    }
+};
+
+const watchCard = async (req, res) => {
+    const { id } = req.params;
+    const userId = req.user.id;
+
+    try {
+        await CardModel.watchCard(id, userId);
+        
+        res.json({ 
+            message: 'Bạn đã theo dõi card này',
+            is_watching: true
+        });
+    } catch (error) {
+        console.error('Card watch error:', error);
+        res.status(400).json({ error: error.message });
+    }
+};
+
+const unwatchCard = async (req, res) => {
+    const { id } = req.params;
+    const userId = req.user.id;
+
+    try {
+        await CardModel.unwatchCard(id, userId);
+        
+        res.json({ 
+            message: 'Bạn đã ngừng theo dõi card này',
+            is_watching: false
+        });
+    } catch (error) {
+        console.error('Card unwatch error:', error);
+        res.status(400).json({ error: error.message });
+    }
+};
+
 export const CardController = {
     create,
     getAll,
@@ -272,5 +442,9 @@ export const CardController = {
     getCardDetails,
     update,
     remove,
-    copyCard, // Thêm function mới
+    copyCard,
+    archiveCard,
+    unarchiveCard,
+    watchCard,
+    unwatchCard,
 };
