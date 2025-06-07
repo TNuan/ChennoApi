@@ -65,4 +65,8 @@ router.patch('/:id/archive', authenticateToken, CardController.archiveCard);
 // Unarchive card
 router.patch('/:id/unarchive', authenticateToken, CardController.unarchiveCard);
 
+// Watch/Unwatch card
+router.patch('/:id/watch', authenticateToken, CardController.watchCard);
+router.patch('/:id/unwatch', authenticateToken, CardController.unwatchCard);
+
 export default router;

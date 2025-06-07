@@ -229,6 +229,77 @@ const getCardById = async (cardId, userId) => {
     return result.rows[0];
 };
 
+const watchCard = async (cardId, userId) => {
+    const client = await pool.connect();
+    try {
+        // Kiểm tra quyền truy cập card
+        const permissionCheck = await client.query(
+            `SELECT c.id FROM cards c
+             JOIN columns col ON c.column_id = col.id
+             JOIN boards b ON col.board_id = b.id
+             JOIN board_members bm ON b.id = bm.board_id
+             WHERE c.id = $1 AND bm.user_id = $2`,
+            [cardId, userId]
+        );
+
+        if (permissionCheck.rows.length === 0) {
+            throw new Error('Bạn không có quyền watch card này');
+        }
+
+        // Thêm watcher
+        const result = await client.query(
+            `INSERT INTO card_watchers (card_id, user_id)
+             VALUES ($1, $2)
+             ON CONFLICT (card_id, user_id) DO NOTHING
+             RETURNING *`,
+            [cardId, userId]
+        );
+
+        return result.rows[0];
+    } finally {
+        client.release();
+    }
+};
+
+const unwatchCard = async (cardId, userId) => {
+    const client = await pool.connect();
+    try {
+        const result = await client.query(
+            `DELETE FROM card_watchers
+             WHERE card_id = $1 AND user_id = $2
+             RETURNING *`,
+            [cardId, userId]
+        );
+
+        return result.rows[0];
+    } finally {
+        client.release();
+    }
+};
+
+const isUserWatchingCard = async (cardId, userId) => {
+    const result = await pool.query(
+        `SELECT 1 FROM card_watchers
+         WHERE card_id = $1 AND user_id = $2`,
+        [cardId, userId]
+    );
+
+    return result.rows.length > 0;
+};
+
+const getCardWatchers = async (cardId) => {
+    const result = await pool.query(
+        `SELECT cw.*, u.username, u.email
+         FROM card_watchers cw
+         JOIN users u ON cw.user_id = u.id
+         WHERE cw.card_id = $1`,
+        [cardId]
+    );
+
+    return result.rows;
+};
+
+// Cập nhật getCardDetails để include watcher status
 const getCardDetails = async (cardId, userId) => {
     const client = await pool.connect();
     try {
@@ -315,6 +386,13 @@ const getCardDetails = async (cardId, userId) => {
             [cardId]
         );
 
+        // Check if current user is watching this card
+        const watchingResult = await client.query(
+            `SELECT 1 FROM card_watchers
+             WHERE card_id = $1 AND user_id = $2`,
+            [cardId, userId]
+        );
+
         const cardDetails = {
             ...card,
             labels: labelsResult.rows,
@@ -335,11 +413,7 @@ const getCardDetails = async (cardId, userId) => {
                     email: activity.email
                 }
             })),
-            // assigned_to: card.assigned_to ? {
-            //     id: card.assigned_to,
-            //     username: card.assigned_to_username,
-            //     email: card.assigned_to_email
-            // } : null
+            is_watching: watchingResult.rows.length > 0 // Thêm thông tin watching
         };
 
         return cardDetails;
@@ -593,7 +667,7 @@ const updateCard = async (cardId, userId, {
 
         await client.query('COMMIT');
         
-        return result.rows[0];
+        return result;
     } catch (err) {
         await client.query('ROLLBACK');
         throw err;
@@ -1101,6 +1175,10 @@ export const CardModel = {
     updateCard,
     deleteCard,
     copyCard,
-    archiveCard,     // Thêm function mới
-    unarchiveCard,   // Thêm function mới
+    archiveCard,
+    unarchiveCard,
+    watchCard,        // Thêm function mới
+    unwatchCard,      // Thêm function mới
+    isUserWatchingCard, // Thêm function mới
+    getCardWatchers,  // Thêm function mới
 };

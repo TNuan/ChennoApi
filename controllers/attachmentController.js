@@ -5,6 +5,7 @@ import fs from 'fs';
 import { socketIO } from '../index.js';
 import { emitBoardChange } from '../services/socketService.js';
 import pool from '../config/db.js';
+import { NotificationService } from '../services/notificationService.js';
 
 // Cấu hình lưu trữ file
 const storage = multer.diskStorage({
@@ -83,6 +84,9 @@ const upload = async (req, res) => {
             }, uploaded_by);
         }
         
+        // Gửi notifications cho watchers
+        await sendAttachmentWatcherNotifications(card_id, uploaded_by, originalname);
+
         res.status(201).json({ message: 'Tải tệp lên thành công', attachment });
     } catch (error) {
         res.status(400).json({ message: error.message });
@@ -189,6 +193,50 @@ const download = async (req, res) => {
     } catch (error) {
         console.error('Download error:', error);
         res.status(500).json({ message: 'Lỗi server khi tải xuống tệp' });
+    }
+};
+
+// Helper function để gửi notifications cho watchers khi có attachment mới - OPTIMIZED
+const sendAttachmentWatcherNotifications = async (cardId, actorUserId, fileName) => {
+    try {
+        // Lấy thông tin card và actor
+        const cardQuery = await pool.query(
+            `SELECT c.title, u.username as actor_username
+             FROM cards c, users u
+             WHERE c.id = $1 AND u.id = $2`,
+            [cardId, actorUserId]
+        );
+
+        if (cardQuery.rows.length === 0) return;
+
+        const card = cardQuery.rows[0];
+        const actorUsername = card.actor_username;
+
+        // Lấy danh sách watchers (trừ người upload)
+        const watchersQuery = await pool.query(
+            `SELECT user_id FROM card_watchers
+             WHERE card_id = $1 AND user_id != $2`,
+            [cardId, actorUserId]
+        );
+
+        if (watchersQuery.rows.length === 0) return;
+
+        const message = `${actorUsername} added an attachment "${fileName}" to card "${card.title}"`;
+        const title = 'New Attachment';
+
+        // Sử dụng bulk notification thay vì vòng lặp
+        await NotificationService.createAndSendBulkNotifications({
+            sender_id: actorUserId,
+            receiver_ids: watchersQuery.rows.map(watcher => watcher.user_id),
+            title: title,
+            content: message,
+            type: 'card_watch',
+            entity_type: 'card',
+            entity_id: cardId
+        });
+
+    } catch (error) {
+        console.error('Error sending attachment watcher notifications:', error);
     }
 };
 
