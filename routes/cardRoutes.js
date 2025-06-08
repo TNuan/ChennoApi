@@ -13,40 +13,14 @@ const validate = (req, res, next) => {
     next();
 };
 
-router.post(
-    '/',
-    authenticateToken,
-    [
-        body('column_id').isInt().withMessage('Column ID phải là số'),
-        body('title').notEmpty().withMessage('Tiêu đề card là bắt buộc'),
-        body('position').optional().isInt().withMessage('Position phải là số'),
-    ],
-    validate,
-    CardController.create
-);
-
-router.get('/:column_id', authenticateToken, CardController.getAll);
-
-router.get('/single/:id', authenticateToken, CardController.getById);
+// ĐẶT ROUTE CỤ THỂ TRƯỚC ROUTE DYNAMIC PARAMETERS
+// Lấy tất cả cards của user cho calendar
+router.get('/my-cards', authenticateToken, CardController.getUserCards);
 
 // Lấy chi tiết đầy đủ của card bao gồm các nhãn, tệp đính kèm, bình luận và hoạt động
 router.get('/details/:id', authenticateToken, CardController.getCardDetails);
 
-router.put(
-    '/:id',
-    authenticateToken,
-    [
-        // body('title').optional().withMessage('Tiêu đề card là bắt buộc'),
-        body('position').optional().isInt().withMessage('Position phải là số'),
-        body('column_id').optional().isInt().withMessage('Column ID phải là số'),
-    ],
-    validate,
-    CardController.update
-);
-
-router.delete('/:id', authenticateToken, CardController.remove);
-
-// Thêm route copy card
+// Copy card
 router.post(
     '/copy/:id',
     authenticateToken,
@@ -59,14 +33,46 @@ router.post(
     CardController.copyCard
 );
 
+// Watch/Unwatch card
+router.patch('/:id/watch', authenticateToken, CardController.watchCard);
+router.patch('/:id/unwatch', authenticateToken, CardController.unwatchCard);
+
 // Archive card
 router.patch('/:id/archive', authenticateToken, CardController.archiveCard);
 
 // Unarchive card
 router.patch('/:id/unarchive', authenticateToken, CardController.unarchiveCard);
 
-// Watch/Unwatch card
-router.patch('/:id/watch', authenticateToken, CardController.watchCard);
-router.patch('/:id/unwatch', authenticateToken, CardController.unwatchCard);
+// Get single card
+router.get('/single/:id', authenticateToken, CardController.getById);
+
+// ROUTES VỚI DYNAMIC PARAMETERS ĐẶT CUỐI CÙNG
+router.post(
+    '/',
+    authenticateToken,
+    [
+        body('column_id').isInt().withMessage('Column ID phải là số'),
+        body('title').notEmpty().withMessage('Tiêu đề card là bắt buộc'),
+        body('position').optional().isInt().withMessage('Position phải là số'),
+    ],
+    validate,
+    CardController.create
+);
+
+// Route này phải đặt cuối vì nó sẽ match bất kỳ string nào
+router.get('/:column_id', authenticateToken, CardController.getAll);
+
+router.put(
+    '/:id',
+    authenticateToken,
+    [
+        body('position').optional().isInt().withMessage('Position phải là số'),
+        body('column_id').optional().isInt().withMessage('Column ID phải là số'),
+    ],
+    validate,
+    CardController.update
+);
+
+router.delete('/:id', authenticateToken, CardController.remove);
 
 export default router;
