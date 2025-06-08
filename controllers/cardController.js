@@ -435,6 +435,22 @@ const unwatchCard = async (req, res) => {
     }
 };
 
+const getUserCards = async (req, res) => {
+    try {
+        const userId = req.user.id;
+        
+        const cards = await CardModel.getUserCards(userId);
+        
+        res.json({ 
+            message: 'Lấy cards của user thành công', 
+            cards 
+        });
+    } catch (error) {
+        console.error('Get user cards error:', error);
+        res.status(400).json({ error: error.message });
+    }
+};
+
 export const CardController = {
     create,
     getAll,
@@ -447,4 +463,5 @@ export const CardController = {
     unarchiveCard,
     watchCard,
     unwatchCard,
+    getUserCards,
 };

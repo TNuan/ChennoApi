@@ -1167,6 +1167,48 @@ const unarchiveCard = async (cardId, userId) => {
     }
 };
 
+const getUserCards = async (userId) => {
+    try {
+        const result = await pool.query(
+            `
+            SELECT 
+                c.id, c.title, c.description, c.due_date, c.created_at,
+                c.status, c.priority_level, c.difficulty_level, c.cover_img,
+                col.title as column_name,
+                b.id as board_id, b.name as board_name,
+                u.username as assigned_to_name,
+                creator.username as created_by_name,
+                (SELECT json_agg(
+                    json_build_object(
+                        'id', l.id,
+                        'name', l.name,
+                        'color', l.color
+                    )
+                ) FROM card_labels cl 
+                JOIN labels l ON cl.label_id = l.id 
+                WHERE cl.card_id = c.id) as labels
+            FROM cards c
+            JOIN columns col ON c.column_id = col.id
+            JOIN boards b ON col.board_id = b.id
+            LEFT JOIN users u ON c.assigned_to = u.id
+            LEFT JOIN users creator ON c.created_by = creator.id
+            WHERE c.assigned_to = $1
+                AND c.is_archived = FALSE
+            ORDER BY 
+                CASE 
+                    WHEN c.due_date IS NOT NULL THEN c.due_date 
+                    ELSE c.created_at 
+                END ASC
+            `,
+            [userId]
+        );
+        
+        return result.rows;
+    } catch (error) {
+        throw new Error('Lỗi khi lấy cards của user: ' + error.message);
+    }
+};
+
 export const CardModel = {
     createCard,
     getCardsByColumnId,
@@ -1181,4 +1223,5 @@ export const CardModel = {
     unwatchCard,      // Thêm function mới
     isUserWatchingCard, // Thêm function mới
     getCardWatchers,  // Thêm function mới
+    getUserCards,
 };
