@@ -183,6 +183,8 @@ const getBoardById = async (id, userId) => {
                         'joined_at', bm.joined_at,
                         'username', u.username,
                         'email', u.email,
+                        'avatar', u.avatar,
+                        'full_name', u.full_name,
                         'is_current_user', (bm.user_id = $2)
                     )
                 ) FILTER (WHERE bm.user_id IS NOT NULL),

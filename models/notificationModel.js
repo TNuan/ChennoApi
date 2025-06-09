@@ -37,6 +37,8 @@ const createBulkNotifications = async ({ sender_id, receiver_ids, title, content
                     'id', s.id,
                     'username', s.username,
                     'email', s.email
+                    'avatar', s.avatar
+                    'full_name', s.full_name
                 ) as sender,
                 json_build_object(
                     'id', r.id,
@@ -66,7 +68,9 @@ const getUserNotifications = async (userId, { limit = 20, offset = 0, unreadOnly
             json_build_object(
                 'id', s.id,
                 'username', s.username,
-                'email', s.email
+                'email', s.email,
+                'avatar', s.avatar,
+                'full_name', s.full_name
             ) as sender,
             json_build_object(
                 'id', r.id,

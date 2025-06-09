@@ -63,4 +63,49 @@ const clearRefreshToken = async (userId) => {
     await pool.query('UPDATE users SET refresh_token = NULL WHERE id = $1', [userId]);
 };
 
-export const UserModel = { createUser, findUserByEmail, searchUser, verifyUser, findUserByToken, saveRefreshToken, findUserByRefreshToken, clearRefreshToken };
+const getUserProfile = async (userId) => {
+    const result = await pool.query(
+        'SELECT id, username, email, avatar, full_name, bio, phone, created_at FROM users WHERE id = $1',
+        [userId]
+    );
+    return result.rows[0];
+};
+
+const updateUserProfile = async (userId, userData) => {
+    const { username, full_name, bio, phone, avatar } = userData;
+    const result = await pool.query(
+        `UPDATE users SET 
+            username = COALESCE($2, username),
+            full_name = COALESCE($3, full_name),
+            bio = COALESCE($4, bio),
+            phone = COALESCE($5, phone),
+            avatar = COALESCE($6, avatar),
+            updated_at = CURRENT_TIMESTAMP
+        WHERE id = $1 
+        RETURNING id, username, email, avatar, full_name, bio, phone, created_at`,
+        [userId, username, full_name, bio, phone, avatar]
+    );
+    return result.rows[0];
+};
+
+const checkUsernameExists = async (username, excludeUserId) => {
+    const result = await pool.query(
+        'SELECT id FROM users WHERE username = $1 AND id != $2',
+        [username, excludeUserId]
+    );
+    return result.rows.length > 0;
+};
+
+export const UserModel = { 
+    createUser, 
+    findUserByEmail, 
+    searchUser, 
+    verifyUser, 
+    findUserByToken, 
+    saveRefreshToken, 
+    findUserByRefreshToken, 
+    clearRefreshToken,
+    getUserProfile,
+    updateUserProfile,
+    checkUsernameExists
+};
