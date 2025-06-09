@@ -82,7 +82,12 @@ const login = async (req, res) => {
         const userInfo = {
             // id: user.id,
             username: user.username,
-            email: user.email
+            email: user.email,
+            full_name: user.full_name || '',
+            bio: user.bio || '',
+            phone: user.phone || '',
+            avatar: user.avatar || '',
+            created_at: user.created_at
         };
 
         res.cookie('refreshToken', refreshToken, {
@@ -181,4 +186,108 @@ const searchUsers = async (req, res) => {
     }
 };
 
-export const UserController = {  register, verifyEmail, login, refreshToken, logout, searchUsers };
+const getProfile = async (req, res) => {
+    try {
+        const userId = req.user.id;
+        const profile = await UserModel.getUserProfile(userId);
+        
+        if (!profile) {
+            return res.status(404).json({
+                status: false,
+                message: 'Không tìm thấy thông tin người dùng'
+            });
+        }
+
+        res.json({
+            status: true,
+            message: 'Lấy thông tin hồ sơ thành công',
+            profile
+        });
+    } catch (err) {
+        res.status(500).json({
+            status: false,
+            message: 'Lỗi server',
+            error: err.message
+        });
+    }
+};
+
+const updateProfile = async (req, res) => {
+    try {
+        const userId = req.user.id;
+        const { username, full_name, bio, phone } = req.body;
+
+        // Kiểm tra username đã tồn tại chưa (trừ user hiện tại)
+        if (username) {
+            const usernameExists = await UserModel.checkUsernameExists(username, userId);
+            if (usernameExists) {
+                return res.status(400).json({
+                    status: false,
+                    message: 'Tên người dùng đã được sử dụng'
+                });
+            }
+        }
+
+        const updatedProfile = await UserModel.updateUserProfile(userId, {
+            username,
+            full_name,
+            bio,
+            phone
+        });
+
+        res.json({
+            status: true,
+            message: 'Cập nhật hồ sơ thành công',
+            profile: updatedProfile
+        });
+    } catch (err) {
+        res.status(500).json({
+            status: false,
+            message: 'Lỗi server',
+            error: err.message
+        });
+    }
+};
+
+const uploadAvatar = async (req, res) => {
+    try {
+        const userId = req.user.id;
+        
+        if (!req.file) {
+            return res.status(400).json({
+                status: false,
+                message: 'Vui lòng chọn file avatar'
+            });
+        }
+
+        const avatarPath = `/uploads/avatars/${req.file.filename}`;
+        
+        const updatedProfile = await UserModel.updateUserProfile(userId, {
+            avatar: avatarPath
+        });
+
+        res.json({
+            status: true,
+            message: 'Cập nhật avatar thành công',
+            profile: updatedProfile
+        });
+    } catch (err) {
+        res.status(500).json({
+            status: false,
+            message: 'Lỗi server',
+            error: err.message
+        });
+    }
+};
+
+export const UserController = { 
+    register, 
+    verifyEmail, 
+    login, 
+    refreshToken, 
+    logout, 
+    searchUsers,
+    getProfile,
+    updateProfile,
+    uploadAvatar
+};
