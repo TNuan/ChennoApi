@@ -234,7 +234,7 @@ const getMembers = async (workspaceId, userId) => {
 
     const result = await pool.query(
         `
-        SELECT wm.user_id, u.username, u.email, wm.role, wm.joined_at
+        SELECT wm.user_id, u.username, u.email, u.avatar, u.full_name, wm.role, wm.joined_at
         FROM workspace_members wm
         JOIN users u ON wm.user_id = u.id
         WHERE wm.workspace_id = $1

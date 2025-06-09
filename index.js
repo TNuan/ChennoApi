@@ -15,6 +15,7 @@ import attachmentRoutes from './routes/attachmentRoutes.js';
 import commentRoutes from './routes/commentRoutes.js';
 import cookieParser from 'cookie-parser';
 import { sendOnlineUsers } from './services/socketService.js';
+import pool from './config/db.js';
 
 dotenv.config();
 
@@ -41,7 +42,7 @@ const io = new Server(httpServer, {
 });
 
 // Middleware xác thực Socket.IO
-io.use((socket, next) => {
+io.use(async (socket, next) => {
     const token = socket.handshake.auth.token;
     
     if (!token) {
@@ -51,9 +52,23 @@ io.use((socket, next) => {
     try {
         // Xác thực token
         const decoded = jwt.verify(token, process.env.ACCESS_TOKEN_SECRET);
-        socket.user = decoded;
+        
+        // Lấy thông tin user đầy đủ từ database
+        const client = await pool.connect();
+        const userResult = await client.query(
+            'SELECT id, username, email, avatar, full_name FROM users WHERE id = $1',
+            [decoded.id]
+        );
+        client.release();
+        
+        if (userResult.rows.length === 0) {
+            return next(new Error('User not found'));
+        }
+        
+        socket.user = userResult.rows[0];
         next();
     } catch (error) {
+        console.error('Socket authentication error:', error);
         return next(new Error('Authentication error'));
     }
 });
