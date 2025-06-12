@@ -603,34 +603,32 @@ const updateCard = async (cardId, userId, {
             ]
         );
 
-        // Ghi lại hoạt động cập nhật nếu có thay đổi
-        if (Object.keys(changes).length > 0) {
-            await client.query(
-                `INSERT INTO card_activities 
-                (card_id, user_id, activity_type, activity_data) 
-                VALUES ($1, $2, $3, $4)`,
-                [
-                    cardId,
-                    userId,
-                    'updated',
-                    JSON.stringify(changes)
-                ]
-            );
-        }
-
-        // Lấy lại thông tin card đã cập nhật kèm theo các dữ liệu phụ trợ
+        // Lấy lại thông tin card đã cập nhật với đầy đủ thông tin như getCardDetails
         const result = await client.query(
             `
             SELECT c.id, c.column_id, c.title, c.description, c.position,
                 c.created_by, c.assigned_to, c.due_date, c.created_at,
                 c.cover_img, c.updated_at, c.resolved_at, c.status,
                 c.priority_level, c.difficulty_level,
-                u.username as created_by_username,
-                au.username as assigned_to_username,
+                u.username as created_by_name, u.email as created_by_email,
+                au.username as assigned_to_name, au.email as assigned_to_email,
+                col.title as column_name,
                 col.board_id,
                 b.name as board_name,
-                COALESCE(att_counts.count, 0) AS attachment_count,
-                COALESCE(com_counts.count, 0) AS comment_count,
+                (SELECT json_agg(
+                    json_build_object(
+                        'id', ca.id,
+                        'file_name', ca.file_name,
+                        'file_path', ca.file_path,
+                        'file_type', ca.file_type,
+                        'file_size', ca.file_size,
+                        'uploaded_by', ca.uploaded_by,
+                        'uploaded_by_username', u_att.username,
+                        'created_at', ca.created_at
+                    )
+                ) FROM card_attachments ca 
+                LEFT JOIN users u_att ON ca.uploaded_by = u_att.id
+                WHERE ca.card_id = c.id AND ca.is_deleted = false) as attachments,
                 (
                     SELECT json_agg(
                         json_build_object(
@@ -642,32 +640,91 @@ const updateCard = async (cardId, userId, {
                     FROM card_labels cl
                     JOIN labels l ON cl.label_id = l.id
                     WHERE cl.card_id = c.id
-                ) as labels
+                ) as labels,
+                (SELECT json_agg(
+                    json_build_object(
+                        'id', cc.id,
+                        'user_id', cc.user_id,
+                        'username', u_com.username,
+                        'email', u_com.email,
+                        'content', cc.content,
+                        'created_at', cc.created_at,
+                        'updated_at', cc.updated_at,
+                        'is_edited', cc.is_edited,
+                        'parent_id', cc.parent_id
+                    ) ORDER BY cc.created_at
+                ) FROM card_comments cc 
+                JOIN users u_com ON cc.user_id = u_com.id 
+                WHERE cc.card_id = c.id AND cc.is_deleted = false) as comments,
+                (SELECT json_agg(
+                    json_build_object(
+                        'id', ca.id,
+                        'user_id', ca.user_id,
+                        'username', u_act.username,
+                        'email', u_act.email,
+                        'activity_type', ca.activity_type,
+                        'activity_data', ca.activity_data,
+                        'created_at', ca.created_at
+                    ) ORDER BY ca.created_at DESC
+                ) FROM card_activities ca 
+                JOIN users u_act ON ca.user_id = u_act.id 
+                WHERE ca.card_id = c.id) as activities,
+                (
+                    SELECT CASE 
+                        WHEN COUNT(*) > 0 THEN true 
+                        ELSE false 
+                    END
+                    FROM card_watchers cw
+                    WHERE cw.card_id = c.id AND cw.user_id = $2
+                ) as is_watching
             FROM cards c
             JOIN columns col ON c.column_id = col.id
             JOIN boards b ON col.board_id = b.id
             LEFT JOIN users u ON c.created_by = u.id
             LEFT JOIN users au ON c.assigned_to = au.id
-            LEFT JOIN (
-                SELECT card_id, COUNT(*) as count 
-                FROM card_attachments 
-                WHERE is_deleted = false 
-                GROUP BY card_id
-            ) att_counts ON c.id = att_counts.card_id
-            LEFT JOIN (
-                SELECT card_id, COUNT(*) as count 
-                FROM card_comments 
-                WHERE is_deleted = false 
-                GROUP BY card_id
-            ) com_counts ON c.id = com_counts.card_id
             WHERE c.id = $1
             `,
-            [cardId]
+            [cardId, userId]
         );
 
         await client.query('COMMIT');
         
-        return result;
+        const cardDetails = result.rows[0];
+        
+        // Format lại data giống getCardDetails
+        if (cardDetails) {
+            // Format comments với user object
+            if (cardDetails.comments) {
+                cardDetails.comments = cardDetails.comments.map(comment => ({
+                    ...comment,
+                    user: {
+                        id: comment.user_id,
+                        username: comment.username,
+                        email: comment.email
+                    }
+                }));
+            }
+
+            // Format activities với user object
+            if (cardDetails.activities) {
+                cardDetails.activities = cardDetails.activities.map(activity => ({
+                    ...activity,
+                    user: {
+                        id: activity.user_id,
+                        username: activity.username,
+                        email: activity.email
+                    }
+                }));
+            }
+
+            // Đảm bảo arrays không null
+            cardDetails.attachments = cardDetails.attachments || [];
+            cardDetails.labels = cardDetails.labels || [];
+            cardDetails.comments = cardDetails.comments || [];
+            cardDetails.activities = cardDetails.activities || [];
+        }
+        
+        return cardDetails;
     } catch (err) {
         await client.query('ROLLBACK');
         throw err;
