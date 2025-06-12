@@ -127,6 +127,10 @@ const getColumnsByBoardId = async (board_id, userId) => {
         cardsResult.rows.forEach(card => {
             // Thêm labels vào card
             card.labels = labelsByCard[card.id] || [];
+
+            // Đảm bảo attachment_count và comment_count là số
+            card.attachment_count = parseInt(card.attachment_count) || 0;
+            card.comment_count = parseInt(card.comment_count) || 0;
             
             if (!cardsByColumn[card.column_id]) {
                 cardsByColumn[card.column_id] = [];

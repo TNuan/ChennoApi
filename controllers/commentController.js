@@ -11,6 +11,22 @@ const create = async (req, res) => {
     try {
         const newComment = await CommentModel.addComment({ card_id, user_id: userId, content, parent_id });
 
+        // Lấy thông tin board để emit thông báo
+        const boardQuery = await pool.query(
+            `SELECT b.id FROM cards c
+             JOIN columns col ON c.column_id = col.id
+             JOIN boards b ON col.board_id = b.id
+             WHERE c.id = $1`,
+            [card_id]
+        );
+        const boardId = boardQuery.rows[0]?.id;
+        if (boardId && socketIO) {
+            emitBoardChange(socketIO, boardId, 'comment_added', {
+                card_id: newComment.card_id,
+                comment: newComment
+            }, userId);
+        }
+
         // Gửi notifications cho watchers
         await sendCommentWatcherNotifications(card_id, userId, content);
 

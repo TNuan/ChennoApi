@@ -213,18 +213,12 @@ const addLabelToCard = async (card_id, label_id, userId) => {
             [card_id, label_id, userId]
         );
 
-        // Ghi lại hoạt động
-        await client.query(
-            `INSERT INTO card_activities (card_id, user_id, activity_type, activity_data)
-            VALUES ($1, $2, 'added_label', $3)`,
-            [card_id, userId, JSON.stringify({ label_id, label_name: labelName })]
-        );
-
         return { 
             board_id: boardId, 
             card_id, 
             label_id, 
-            label_name: labelName 
+            label_name: labelName,
+            label_color: labelCheck.rows[0].color
         };
     } finally {
         client.release();
@@ -269,13 +263,6 @@ const removeLabelFromCard = async (card_id, label_id, userId) => {
             `DELETE FROM card_labels
             WHERE card_id = $1 AND label_id = $2`,
             [card_id, label_id]
-        );
-
-        // Ghi lại hoạt động
-        await client.query(
-            `INSERT INTO card_activities (card_id, user_id, activity_type, activity_data)
-            VALUES ($1, $2, 'removed_label', $3)`,
-            [card_id, userId, JSON.stringify({ label_id, label_name: labelName })]
         );
 
         return { board_id: boardId };

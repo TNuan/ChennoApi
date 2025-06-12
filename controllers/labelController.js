@@ -85,8 +85,7 @@ const addToCard = async (req, res) => {
         if (socketIO) {
             emitBoardChange(socketIO, result.board_id, 'label_added_to_card', {
                 card_id,
-                label_id,
-                label_name: result.label_name
+                label: {id: result.label_id, name: result.label_name, color: result.label_color},
             }, userId);
         }
         
