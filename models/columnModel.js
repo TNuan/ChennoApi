@@ -70,13 +70,15 @@ const getColumnsByBoardId = async (board_id, userId) => {
         const cardsResult = await client.query(
             `
             SELECT 
-                c.id, c.column_id, c.title, c.description, c.cover_img, c.position,
-                c.created_by, c.assigned_to, c.due_date, c.created_at,
-                c.status, c.priority_level, c.difficulty_level,
+                c.id, c.column_id, c.title, c.cover_img, c.position,
+                c.assigned_to, c.due_date, c.status, 
+                u.username AS assigned_username,
+                u.avatar AS assigned_avatar,
                 COALESCE(att_counts.count, 0) AS attachment_count,
                 COALESCE(com_counts.count, 0) AS comment_count
             FROM cards c
             JOIN columns col ON c.column_id = col.id
+            LEFT JOIN users u ON c.assigned_to = u.id
             LEFT JOIN (
                 SELECT card_id, COUNT(*) as count 
                 FROM card_attachments 
