@@ -82,7 +82,7 @@ const update = async (req, res) => {
         }
 
         // Thông báo cập nhật board cho tất cả thành viên
-        emitBoardChange(socketIO, id, 'update_board', board, userId);
+        emitBoardChange(socketIO, id, 'board_update', board, userId);
 
         res.json({ 
             message: 'Cập nhật board thành công', 

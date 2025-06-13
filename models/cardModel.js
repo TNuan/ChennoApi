@@ -1266,6 +1266,101 @@ const getUserCards = async (userId) => {
     }
 };
 
+const getArchivedCardsByBoard = async (boardId, userId, options = {}) => {
+    const { search = '', limit = 50, offset = 0 } = options;
+    
+    const client = await pool.connect();
+    try {
+        // Kiểm tra quyền truy cập board
+        const permissionCheck = await client.query(
+            `SELECT bm.role FROM board_members bm
+             WHERE bm.board_id = $1 AND bm.user_id = $2
+             UNION
+             SELECT 'public' as role FROM boards b
+             WHERE b.id = $1 AND b.visibility = 1`,
+            [boardId, userId]
+        );
+
+        if (permissionCheck.rows.length === 0) {
+            throw new Error('Bạn không có quyền xem board này');
+        }
+
+        // Build query with search
+        let whereClause = 'WHERE col.board_id = $1 AND c.is_archived = true';
+        let queryParams = [boardId];
+        
+        if (search && search.trim()) {
+            whereClause += ' AND (c.title ILIKE $2 OR c.description ILIKE $2)';
+            queryParams.push(`%${search.trim()}%`);
+        }
+
+        // Add limit and offset
+        const limitOffset = ` ORDER BY c.archived_at DESC LIMIT $${queryParams.length + 1} OFFSET $${queryParams.length + 2}`;
+        queryParams.push(limit, offset);
+
+        // Lấy danh sách cards đã được archive
+        const result = await client.query(
+            `SELECT 
+                c.id, c.title, c.description, c.created_at, c.archived_at,
+                c.due_date, c.cover_img, c.status, c.priority_level, c.difficulty_level,
+                c.position, c.updated_at, c.resolved_at,
+                col.id as column_id,
+                col.title as column_name,
+                creator.id as created_by,
+                creator.username as created_by_username,
+                creator.email as created_by_email,
+                archiver.id as archived_by,
+                archiver.username as archived_by_username,
+                archiver.email as archived_by_email,
+                assignee.id as assigned_to,
+                assignee.username as assigned_to_username,
+                assignee.email as assigned_to_email,
+                (SELECT COUNT(*) FROM card_attachments ca 
+                 WHERE ca.card_id = c.id AND ca.is_deleted = false) as attachment_count,
+                (SELECT COUNT(*) FROM card_comments cc 
+                 WHERE cc.card_id = c.id AND cc.is_deleted = false) as comment_count,
+                (SELECT json_agg(
+                    json_build_object(
+                        'id', l.id,
+                        'name', l.name,
+                        'color', l.color
+                    )
+                ) FROM card_labels cl 
+                JOIN labels l ON cl.label_id = l.id 
+                WHERE cl.card_id = c.id) as labels
+             FROM cards c
+             JOIN columns col ON c.column_id = col.id
+             LEFT JOIN users creator ON c.created_by = creator.id
+             LEFT JOIN users archiver ON c.archived_by = archiver.id
+             LEFT JOIN users assignee ON c.assigned_to = assignee.id
+             ${whereClause}
+             ${limitOffset}`,
+            queryParams
+        );
+
+        // Get total count for pagination
+        let countQuery = `SELECT COUNT(*) as total FROM cards c
+                         JOIN columns col ON c.column_id = col.id
+                         ${whereClause.replace(limitOffset, '')}`;
+        
+        const countResult = await client.query(countQuery, queryParams.slice(0, -2)); // Remove limit and offset params
+        const total = parseInt(countResult.rows[0].total);
+
+        return {
+            cards: result.rows,
+            pagination: {
+                total,
+                limit: parseInt(limit),
+                offset: parseInt(offset),
+                has_more: (parseInt(offset) + parseInt(limit)) < total
+            }
+        };
+
+    } finally {
+        client.release();
+    }
+};
+
 export const CardModel = {
     createCard,
     getCardsByColumnId,
@@ -1276,9 +1371,10 @@ export const CardModel = {
     copyCard,
     archiveCard,
     unarchiveCard,
-    watchCard,        // Thêm function mới
-    unwatchCard,      // Thêm function mới
-    isUserWatchingCard, // Thêm function mới
-    getCardWatchers,  // Thêm function mới
+    getArchivedCardsByBoard, // Thêm function mới
+    watchCard,
+    unwatchCard,
+    isUserWatchingCard,
+    getCardWatchers,
     getUserCards,
 };

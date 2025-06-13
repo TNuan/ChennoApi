@@ -388,7 +388,7 @@ const unarchiveCard = async (req, res) => {
         
         // Emit socket event cho real-time update
         if (unarchivedCard.board_id && socketIO) {
-            emitBoardChange(socketIO, unarchivedCard.board_id, 'card_unarchived', unarchivedCard, userId);
+            emitBoardChange(socketIO, unarchivedCard.board_id, 'card_unarchived', unarchivedCard);
         }
         
         res.json({ 
@@ -451,6 +451,36 @@ const getUserCards = async (req, res) => {
     }
 };
 
+const getArchivedCardsByBoard = async (req, res) => {
+    const { boardId } = req.params;
+    const userId = req.user.id;
+    const { search, limit = 50, offset = 0 } = req.query;
+
+    try {
+        // Validate boardId
+        if (!boardId || isNaN(parseInt(boardId))) {
+            return res.status(400).json({ error: 'Board ID không hợp lệ' });
+        }
+
+        const options = {
+            search: search || '',
+            limit: Math.min(parseInt(limit) || 50, 100), // Max 100 cards per request
+            offset: parseInt(offset) || 0
+        };
+
+        const result = await CardModel.getArchivedCardsByBoard(parseInt(boardId), userId, options);
+
+        res.json({
+            message: 'Lấy danh sách archived cards thành công',
+            data: result
+        });
+
+    } catch (error) {
+        console.error('Get archived cards error:', error);
+        res.status(500).json({ error: error.message });
+    }
+};
+
 export const CardController = {
     create,
     getAll,
@@ -461,6 +491,7 @@ export const CardController = {
     copyCard,
     archiveCard,
     unarchiveCard,
+    getArchivedCardsByBoard, // Thêm function mới
     watchCard,
     unwatchCard,
     getUserCards,

@@ -1,7 +1,7 @@
 import express from 'express';
 import { CardController } from '../controllers/cardController.js';
 import authenticateToken from '../middleware/authMiddleware.js';
-import { body, validationResult } from 'express-validator';
+import { body, param, query, validationResult } from 'express-validator';
 
 const router = express.Router();
 
@@ -19,6 +19,20 @@ router.get('/my-cards', authenticateToken, CardController.getUserCards);
 
 // Lấy chi tiết đầy đủ của card bao gồm các nhãn, tệp đính kèm, bình luận và hoạt động
 router.get('/details/:id', authenticateToken, CardController.getCardDetails);
+
+// Lấy danh sách archived cards theo board ID
+router.get(
+    '/archived/board/:boardId',
+    authenticateToken,
+    [
+        param('boardId').isInt({ min: 1 }).withMessage('Board ID phải là số nguyên dương'),
+        query('search').optional().isLength({ max: 255 }).withMessage('Search term quá dài'),
+        query('limit').optional().isInt({ min: 1, max: 100 }).withMessage('Limit phải từ 1-100'),
+        query('offset').optional().isInt({ min: 0 }).withMessage('Offset phải >= 0')
+    ],
+    validate,
+    CardController.getArchivedCardsByBoard
+);
 
 // Copy card
 router.post(
