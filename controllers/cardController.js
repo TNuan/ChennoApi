@@ -7,7 +7,7 @@ import pool from '../config/db.js';
 const create = async (req, res) => {
   try {
     const userId = req.user.id;
-    const { column_id, title, description, assigned_to, due_date, status, priority_level, difficulty_level } = req.body;
+    const { column_id, title, description, assigned_to, due_date, start_date, status, priority_level, difficulty_level } = req.body;
     
     if (!column_id || !title) {
       return res.status(400).json({ error: 'Column ID và tiêu đề là bắt buộc' });
@@ -21,10 +21,10 @@ const create = async (req, res) => {
       created_by: userId,
       assigned_to,
       due_date,
+      start_date,
       status,
       priority_level,
       difficulty_level
-      // Không truyền position
     });
     
     res.status(201).json({ card: newCard });
@@ -92,7 +92,7 @@ const getCardDetails = async (req, res) => {
 const update = async (req, res) => {
     const { id } = req.params;
     const { 
-        title, description, position, column_id, assigned_to, due_date,
+        title, description, position, column_id, assigned_to, due_date, start_date,
         cover_img, status, priority_level, difficulty_level, resolved_at
     } = req.body;
     const userId = req.user.id;
@@ -149,7 +149,7 @@ const update = async (req, res) => {
         }
 
         const card = await CardModel.updateCard(id, userId, { 
-            title, description, position, column_id, assigned_to, due_date,
+            title, description, position, column_id, assigned_to, due_date, start_date,
             cover_img, status, priority_level, difficulty_level, resolved_at
         });
         
@@ -159,7 +159,7 @@ const update = async (req, res) => {
 
         // Gửi notifications cho watchers nếu có thay đổi quan trọng
         await sendCardWatcherNotifications(id, userId, oldCard, {
-            title, description, assigned_to, due_date, status
+            title, description, assigned_to, due_date, start_date, status
         });
 
         // Lấy thông tin board_id mới sau khi cập nhật
@@ -233,7 +233,7 @@ const sendCardWatcherNotifications = async (cardId, actorUserId, oldCard, update
 
         // Xác định các thay đổi quan trọng
         const changes = {};
-        const watchableFields = ['title', 'description', 'assigned_to', 'due_date', 'status'];
+        const watchableFields = ['title', 'description', 'assigned_to', 'due_date', 'start_date', 'status'];
         
         for (const field of watchableFields) {
             if (updateData[field] !== undefined && updateData[field] !== oldCard[field]) {
@@ -253,6 +253,7 @@ const sendCardWatcherNotifications = async (cardId, actorUserId, oldCard, update
                 case 'description': return 'description';
                 case 'assigned_to': return 'assignee';
                 case 'due_date': return 'due date';
+                case 'start_date': return 'start date';
                 case 'status': return 'status';
                 default: return field;
             }

@@ -1,6 +1,6 @@
 import pool from '../config/db.js';
 
-const createCard = async ({ column_id, title, description, position, created_by, assigned_to, due_date, status, priority_level, difficulty_level }) => {
+const createCard = async ({ column_id, title, description, position, created_by, assigned_to, due_date, start_date, status, priority_level, difficulty_level }) => {
     const client = await pool.connect();
     try {
         await client.query('BEGIN');
@@ -48,12 +48,15 @@ const createCard = async ({ column_id, title, description, position, created_by,
             cardPosition = positionResult.rows[0].next_position;
         }
 
-        // Tiếp tục như cũ
+        // Xác định resolved_at dựa trên status ban đầu
+        const initialStatus = status || 'todo';
+        const resolved_at = initialStatus === 'done' ? new Date().toISOString() : null;
+
         const result = await client.query(
             `INSERT INTO cards 
-             (column_id, title, description, position, created_by, assigned_to, due_date, 
-              status, priority_level, difficulty_level) 
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) 
+             (column_id, title, description, position, created_by, assigned_to, due_date, start_date,
+              status, priority_level, difficulty_level, resolved_at) 
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12) 
              RETURNING *`,
             [
                 column_id, 
@@ -62,10 +65,12 @@ const createCard = async ({ column_id, title, description, position, created_by,
                 cardPosition, 
                 created_by, 
                 assigned_to || null, 
+                start_date || null,
                 due_date || null,
-                status || 'todo',
+                initialStatus,
                 priority_level || 0,
-                difficulty_level || 0
+                difficulty_level || 0,
+                resolved_at
             ]
         );
 
@@ -78,7 +83,14 @@ const createCard = async ({ column_id, title, description, position, created_by,
                 result.rows[0].id,
                 created_by,
                 'created',
-                JSON.stringify({ title, description })
+                JSON.stringify({ 
+                    title, 
+                    description, 
+                    status: initialStatus,
+                    start_date,
+                    due_date,
+                    resolved_at: resolved_at 
+                })
             ]
         );
 
@@ -113,12 +125,15 @@ const getCardsByColumnId = async (column_id, userId) => {
         throw new Error('Bạn không có quyền xem các card trong column này');
     }
     
-    // Tiếp tục lấy dữ liệu... (chỉ lấy cards chưa bị archive)
+    // Cập nhật query - force DATE format cho start_date và due_date
     const result = await pool.query(
         `
         SELECT c.id, c.column_id, c.title, c.description, c.position, 
-               c.created_by, c.assigned_to, c.due_date, c.created_at,
-               c.cover_img, c.updated_at, c.resolved_at, c.status,
+               c.created_by, c.assigned_to, 
+               c.due_date::text as due_date,        -- Force string format
+               c.start_date::text as start_date,    -- Force string format
+               c.resolved_at::text as resolved_at, -- Force string format
+               c.created_at, c.cover_img, c.updated_at, c.status,
                c.priority_level, c.difficulty_level, c.is_archived,
                u.username as created_by_name,
                au.username as assigned_to_name,
@@ -164,12 +179,15 @@ const getCardById = async (cardId, userId) => {
         throw new Error('Bạn không có quyền xem card này');
     }
     
-    // Tiếp tục lấy dữ liệu...
+    // Cập nhật query
     const result = await pool.query(
         `
         SELECT c.id, c.column_id, c.title, c.description, c.position,
-               c.created_by, c.assigned_to, c.due_date, c.created_at,
-               c.cover_img, c.updated_at, c.resolved_at, c.status,
+               c.created_by, c.assigned_to, 
+               c.due_date::text as due_date,        -- Force string format
+               c.start_date::text as start_date,    -- Force string format
+               c.resolved_at::text as resolved_at, -- Force string format
+               c.created_at, c.cover_img, c.updated_at, c.status,
                c.priority_level, c.difficulty_level,
                u.username as created_by_name, u.email as created_by_email,
                au.username as assigned_to_name, au.email as assigned_to_email,
@@ -325,6 +343,9 @@ const getCardDetails = async (cardId, userId) => {
         // Lấy thông tin card và dữ liệu liên quan...
         const cardResult = await client.query(
             `SELECT c.*, 
+             c.due_date::text as due_date,        -- Force string format
+             c.start_date::text as start_date,    -- Force string format
+             c.resolved_at::text as resolved_at, -- Force string format
              col.title as column_name,
              col.board_id,
              b.name as board_name,
@@ -423,8 +444,8 @@ const getCardDetails = async (cardId, userId) => {
 };
 
 const updateCard = async (cardId, userId, { 
-    title, description, position, column_id, assigned_to, due_date, 
-    cover_img, status, priority_level, difficulty_level, resolved_at 
+    title, description, position, column_id, assigned_to, due_date, start_date,
+    cover_img, status, priority_level, difficulty_level 
 }) => {
     const client = await pool.connect();
     try {
@@ -449,6 +470,7 @@ const updateCard = async (cardId, userId, {
         const boardId = card.board_id;
         const oldColumnId = card.column_id;
         const oldPosition = card.position;
+        const oldStatus = card.status;
         
         // Kiểm tra người dùng có phải là member của board không
         const memberCheck = await client.query(
@@ -495,17 +517,34 @@ const updateCard = async (cardId, userId, {
             if (columnCheck.rows.length === 0) {
                 throw new Error('Column không tồn tại');
             }
-            
-            // if (columnCheck.rows[0].board_id !== boardId) {
-            //     throw new Error('Không thể di chuyển card sang board khác');
-            // }
+        }
+
+        // Xác định resolved_at dựa trên status
+        let resolved_at = null;
+        if (status === 'done' && oldStatus !== 'done') {
+            // Status thay đổi thành 'done' từ status khác
+            resolved_at = new Date().toISOString();
+        } else if (status && status !== 'done' && oldStatus === 'done') {
+            // Status thay đổi từ 'done' sang status khác
+            resolved_at = null;
+        } else if (oldStatus === 'done') {
+            // status hiện tại là 'done'
+            resolved_at = card.resolved_at;
         }
 
         // Xác định các thay đổi để ghi log
         const changes = {};
         if (title && title !== card.title) changes.title = { from: card.title, to: title };
         if (description && description !== card.description) changes.description = { from: card.description, to: description };
-        if (status && status !== card.status) changes.status = { from: card.status, to: status };
+        if (status && status !== card.status) {
+            changes.status = { from: card.status, to: status };
+            // Thêm thông tin về resolved_at change
+            if (status === 'done' && oldStatus !== 'done') {
+                changes.resolved_at = { from: card.resolved_at, to: resolved_at };
+            } else if (status !== 'done' && oldStatus === 'done') {
+                changes.resolved_at = { from: card.resolved_at, to: null };
+            }
+        }
         if (priority_level !== undefined && priority_level !== card.priority_level) 
             changes.priority_level = { from: card.priority_level, to: priority_level };
         if (difficulty_level !== undefined && difficulty_level !== card.difficulty_level) 
@@ -513,6 +552,7 @@ const updateCard = async (cardId, userId, {
         if (column_id && column_id !== card.column_id) changes.column_id = { from: card.column_id, to: column_id };
         if (position !== undefined && position !== card.position) changes.position = { from: card.position, to: position };
         if (assigned_to !== undefined && assigned_to !== card.assigned_to) changes.assigned_to = { from: card.assigned_to, to: assigned_to };
+        if (start_date && start_date !== card.start_date) changes.start_date = { from: card.start_date, to: start_date };
         if (due_date && due_date !== card.due_date) changes.due_date = { from: card.due_date, to: due_date };
         if (resolved_at && resolved_at !== card.resolved_at) changes.resolved_at = { from: card.resolved_at, to: resolved_at };
         
@@ -569,7 +609,7 @@ const updateCard = async (cardId, userId, {
             }
         }
 
-        // Cập nhật card
+        // Cập nhật card với resolved_at được tính toán và normalized dates
         await client.query(
             `
             UPDATE cards
@@ -579,14 +619,14 @@ const updateCard = async (cardId, userId, {
                 column_id = COALESCE($4, column_id), 
                 assigned_to = $5, 
                 due_date = $6,
-                cover_img = $7,
-                status = COALESCE($8, status),
-                priority_level = COALESCE($9, priority_level),
-                difficulty_level = COALESCE($10, difficulty_level),
-                resolved_at = $11,
+                start_date = $7,
+                cover_img = $8,
+                status = COALESCE($9, status),
+                priority_level = COALESCE($10, priority_level),
+                difficulty_level = COALESCE($11, difficulty_level),
+                resolved_at = $12,
                 updated_at = CURRENT_TIMESTAMP
-            WHERE id = $12
-            `,
+            WHERE id = $13`,
             [
                 title, 
                 description, 
@@ -594,6 +634,7 @@ const updateCard = async (cardId, userId, {
                 column_id, 
                 assigned_to, // Có thể là null để xóa người được giao
                 due_date, // Có thể là null để xóa ngày hết hạn
+                start_date, // Có thể là null để xóa ngày bắt đầu
                 cover_img,
                 status,
                 priority_level,
@@ -603,12 +644,30 @@ const updateCard = async (cardId, userId, {
             ]
         );
 
-        // Lấy lại thông tin card đã cập nhật với đầy đủ thông tin như getCardDetails
+        // Ghi lại hoạt động nếu có thay đổi (uncomment nếu cần)
+        // if (Object.keys(changes).length > 0) {
+        //     await client.query(
+        //         `INSERT INTO card_activities 
+        //          (card_id, user_id, activity_type, activity_data) 
+        //          VALUES ($1, $2, $3, $4)`,
+        //         [
+        //             cardId,
+        //             userId,
+        //             'updated',
+        //             JSON.stringify({ changes })
+        //         ]
+        //     );
+        // }
+
+        // Cập nhật query cuối để lấy card với đầy đủ thông tin
         const result = await client.query(
             `
             SELECT c.id, c.column_id, c.title, c.description, c.position,
-                c.created_by, c.assigned_to, c.due_date, c.created_at,
-                c.cover_img, c.updated_at, c.resolved_at, c.status,
+                c.created_by, c.assigned_to, 
+                c.due_date::text as due_date,        -- Force string format
+                c.start_date::text as start_date,    -- Force string format
+                c.resolved_at::text as resolved_at, -- Force string format
+                c.created_at, c.cover_img, c.updated_at, c.status,
                 c.priority_level, c.difficulty_level,
                 u.username as created_by_name, u.email as created_by_email,
                 au.username as assigned_to_name, au.email as assigned_to_email,
@@ -727,6 +786,7 @@ const updateCard = async (cardId, userId, {
         return cardDetails;
     } catch (err) {
         await client.query('ROLLBACK');
+        console.error('Error updating card:', err);
         throw err;
     } finally {
         client.release();
@@ -861,7 +921,7 @@ const copyCard = async (cardId, targetColumnId, userId, options = {}) => {
             `INSERT INTO cards 
              (column_id, title, description, position, created_by, due_date, 
               cover_img, status, priority_level, difficulty_level) 
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) 
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11) 
              RETURNING *`,
             [
                 targetColumnId,
@@ -972,6 +1032,8 @@ const copyCard = async (cardId, targetColumnId, userId, options = {}) => {
         // Lấy lại card với đầy đủ thông tin
         const finalCardQuery = await client.query(
             `SELECT c.*, 
+             c.due_date::text as due_date,        -- Force string format
+             c.start_date::text as start_date,    -- Force string format
              u.username as created_by_username,
              col.board_id,
              COALESCE(att_counts.count, 0) AS attachment_count,
@@ -1180,6 +1242,8 @@ const unarchiveCard = async (cardId, userId) => {
         // Lấy lại card với đầy đủ thông tin
         const finalCardQuery = await client.query(
             `SELECT c.*, 
+             c.due_date::text as due_date,        -- Force string format
+             c.start_date::text as start_date,    -- Force string format
              u.username as created_by_username,
              col.board_id,
              COALESCE(att_counts.count, 0) AS attachment_count,
@@ -1229,8 +1293,11 @@ const getUserCards = async (userId) => {
         const result = await pool.query(
             `
             SELECT 
-                c.id, c.title, c.description, c.due_date, c.created_at,
-                c.status, c.priority_level, c.difficulty_level, c.cover_img,
+                c.id, c.title, c.description, 
+                c.due_date::text as due_date,        -- Force string format
+                c.start_date::text as start_date,    -- Force string format
+                c.resolved_at::text as resolved_at, -- Force string format
+                c.created_at, c.status, c.priority_level, c.difficulty_level, c.cover_img,
                 col.title as column_name,
                 b.id as board_id, b.name as board_name,
                 u.username as assigned_to_name,
@@ -1302,7 +1369,8 @@ const getArchivedCardsByBoard = async (boardId, userId, options = {}) => {
         const result = await client.query(
             `SELECT 
                 c.id, c.title, c.description, c.created_at, c.archived_at,
-                c.due_date, c.cover_img, c.status, c.priority_level, c.difficulty_level,
+                c.due_date::text as due_date,        -- Force string format
+                c.cover_img, c.status, c.priority_level, c.difficulty_level,
                 c.position, c.updated_at, c.resolved_at,
                 col.id as column_id,
                 col.title as column_name,
