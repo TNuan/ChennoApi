@@ -71,7 +71,7 @@ const getColumnsByBoardId = async (board_id, userId) => {
             `
             SELECT 
                 c.id, c.column_id, c.title, c.cover_img, c.position,
-                c.assigned_to, c.due_date, c.status, 
+                c.assigned_to, c.due_date::text as due_date, c.resolved_at::text as resolved_at, c.status, 
                 u.username AS assigned_username,
                 u.avatar AS assigned_avatar,
                 COALESCE(att_counts.count, 0) AS attachment_count,

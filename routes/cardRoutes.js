@@ -67,7 +67,7 @@ router.post(
     [
         body('column_id').isInt().withMessage('Column ID phải là số'),
         body('title').notEmpty().withMessage('Tiêu đề card là bắt buộc'),
-        body('position').optional().isInt().withMessage('Position phải là số'),
+        body('position').optional().isInt().withMessage('Position phải là số')
     ],
     validate,
     CardController.create
@@ -81,7 +81,7 @@ router.put(
     authenticateToken,
     [
         body('position').optional().isInt().withMessage('Position phải là số'),
-        body('column_id').optional().isInt().withMessage('Column ID phải là số'),
+        body('column_id').optional().isInt().withMessage('Column ID phải là số')
     ],
     validate,
     CardController.update
