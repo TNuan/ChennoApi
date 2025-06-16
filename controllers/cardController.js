@@ -482,6 +482,35 @@ const getArchivedCardsByBoard = async (req, res) => {
     }
 };
 
+const getWorkspaceCardsAnalytics = async (req, res) => {
+    try {
+        const { workspaceId } = req.params;
+        const { days = 30 } = req.query;
+        const userId = req.user.id;
+
+        // Validate workspaceId
+        if (!workspaceId || isNaN(parseInt(workspaceId))) {
+            return res.status(400).json({ error: 'Workspace ID không hợp lệ' });
+        }
+
+        const analytics = await CardModel.getWorkspaceCardsAnalytics(
+            parseInt(workspaceId), 
+            userId, 
+            parseInt(days)
+        );
+
+        res.json({
+            message: 'Lấy analytics workspace thành công',
+            data: analytics,
+            period_days: parseInt(days)
+        });
+
+    } catch (error) {
+        console.error('Get workspace cards analytics error:', error);
+        res.status(500).json({ error: error.message });
+    }
+};
+
 export const CardController = {
     create,
     getAll,
@@ -492,8 +521,9 @@ export const CardController = {
     copyCard,
     archiveCard,
     unarchiveCard,
-    getArchivedCardsByBoard, // Thêm function mới
+    getArchivedCardsByBoard,
     watchCard,
     unwatchCard,
     getUserCards,
+    getWorkspaceCardsAnalytics, // Thêm function mới
 };
