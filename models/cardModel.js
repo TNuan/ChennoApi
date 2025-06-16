@@ -1429,6 +1429,164 @@ const getArchivedCardsByBoard = async (boardId, userId, options = {}) => {
     }
 };
 
+const getWorkspaceCardsAnalytics = async (workspaceId, userId, days = 30) => {
+    const client = await pool.connect();
+    try {
+        // Kiểm tra quyền truy cập workspace
+        const accessCheck = await client.query(
+            'SELECT role FROM workspace_members WHERE workspace_id = $1 AND user_id = $2',
+            [workspaceId, userId]
+        );
+        
+        if (accessCheck.rows.length === 0) {
+            throw new Error('Không có quyền truy cập workspace này');
+        }
+
+        // Query analytics data
+        const analyticsQuery = `
+            WITH workspace_cards AS (
+                SELECT 
+                    c.*,
+                    u_assigned.id as assigned_user_id,
+                    u_assigned.username as assigned_username,
+                    u_assigned.full_name as assigned_full_name,
+                    u_assigned.avatar as assigned_avatar
+
+                FROM cards c
+                JOIN columns col ON c.column_id = col.id
+                JOIN boards b ON col.board_id = b.id
+                LEFT JOIN users u_assigned ON c.assigned_to = u_assigned.id
+                WHERE b.workspace_id = $1 
+                    AND c.is_archived = false
+                    AND c.created_at >= CURRENT_DATE - INTERVAL '${days} days'
+            ),
+            user_performance AS (
+                SELECT 
+                    COALESCE(wc.assigned_user_id, null) as user_id,
+                    COALESCE(wc.assigned_username, '') as username,
+                    COALESCE(wc.assigned_full_name, '') as full_name,
+                    COALESCE(wc.assigned_avatar, '') as avatar,
+                    
+                    -- Tổng số cards
+                    COUNT(wc.id) as total_cards,
+                    
+                    -- Cards hoàn thành
+                    COUNT(wc.id) FILTER (WHERE wc.status = 'done') as completed_cards,
+                    
+                    -- Cards đang làm
+                    COUNT(wc.id) FILTER (WHERE wc.status = 'in_progress') as in_progress_cards,
+                    
+                    -- Cards chưa bắt đầu
+                    COUNT(wc.id) FILTER (WHERE wc.status = 'todo') as todo_cards,
+                    
+                    -- Cards quá hạn (chưa hoàn thành nhưng đã quá due_date)
+                    COUNT(wc.id) FILTER (
+                        WHERE wc.due_date < CURRENT_DATE 
+                        AND wc.status != 'done'
+                        AND wc.due_date IS NOT NULL
+                    ) as overdue_cards,
+                    
+                    -- Cards hoàn thành đúng hạn
+                    COUNT(wc.id) FILTER (
+                        WHERE wc.status = 'done' 
+                        AND wc.resolved_at IS NOT NULL 
+                        AND wc.due_date IS NOT NULL
+                        AND DATE(wc.resolved_at) <= wc.due_date
+                    ) as on_time_completed,
+                    
+                    -- Cards hoàn thành trễ hạn
+                    COUNT(wc.id) FILTER (
+                        WHERE wc.status = 'done' 
+                        AND wc.resolved_at IS NOT NULL 
+                        AND wc.due_date IS NOT NULL
+                        AND DATE(wc.resolved_at) > wc.due_date
+                    ) as late_completed,
+                    
+                    -- Thời gian hoàn thành trung bình (tính bằng ngày)
+                    AVG(
+                        CASE 
+                            WHEN wc.status = 'done' AND wc.resolved_at IS NOT NULL 
+                            THEN EXTRACT(EPOCH FROM (wc.resolved_at - wc.created_at))/86400 
+                            ELSE NULL 
+                        END
+                    ) as avg_completion_days,
+                    
+                    -- Cards theo priority
+                    COUNT(wc.id) FILTER (WHERE wc.priority_level = 3) as high_priority_cards,
+                    COUNT(wc.id) FILTER (WHERE wc.priority_level = 2) as medium_priority_cards,
+                    COUNT(wc.id) FILTER (WHERE wc.priority_level = 1) as low_priority_cards
+                    
+                FROM workspace_cards wc
+                WHERE (wc.assigned_user_id IS NOT NULL)
+                GROUP BY 
+                    COALESCE(wc.assigned_user_id, null),
+                    COALESCE(wc.assigned_username, ''),
+                    COALESCE(wc.assigned_full_name, ''),
+                    COALESCE(wc.assigned_avatar, '')
+            ),
+            workspace_summary AS (
+                SELECT 
+                    COUNT(wc.id) as total_workspace_cards,
+                    COUNT(wc.id) FILTER (WHERE wc.status = 'done') as total_completed_cards,
+                    COUNT(wc.id) FILTER (WHERE wc.status = 'in_progress') as total_in_progress_cards,
+                    COUNT(wc.id) FILTER (WHERE wc.status = 'todo') as total_todo_cards,
+                    COUNT(wc.id) FILTER (
+                        WHERE wc.due_date < CURRENT_DATE 
+                        AND wc.status != 'done'
+                        AND wc.due_date IS NOT NULL
+                    ) as total_overdue_cards,
+                    COUNT(DISTINCT wc.assigned_user_id) as active_users
+                FROM workspace_cards wc
+            )
+            SELECT 
+                json_build_object(
+                    'user_performance', json_agg(
+                        json_build_object(
+                            'user_id', up.user_id,
+                            'username', up.username,
+                            'full_name', up.full_name,
+                            'avatar', up.avatar,
+                            'total_cards', up.total_cards,
+                            'completed_cards', up.completed_cards,
+                            'in_progress_cards', up.in_progress_cards,
+                            'todo_cards', up.todo_cards,
+                            'overdue_cards', up.overdue_cards,
+                            'on_time_completed', up.on_time_completed,
+                            'late_completed', up.late_completed,
+                            'avg_completion_days', ROUND(up.avg_completion_days::numeric, 2),
+                            'high_priority_cards', up.high_priority_cards,
+                            'medium_priority_cards', up.medium_priority_cards,
+                            'low_priority_cards', up.low_priority_cards
+                        ) ORDER BY up.total_cards DESC
+                    ),
+                    'workspace_summary', (SELECT row_to_json(ws) FROM workspace_summary ws)
+                ) as analytics_data
+            FROM user_performance up
+        `;
+
+        const result = await client.query(analyticsQuery, [workspaceId]);
+        
+        if (result.rows.length === 0) {
+            return {
+                user_performance: [],
+                workspace_summary: {
+                    total_workspace_cards: 0,
+                    total_completed_cards: 0,
+                    total_in_progress_cards: 0,
+                    total_todo_cards: 0,
+                    total_overdue_cards: 0,
+                    active_users: 0
+                }
+            };
+        }
+
+        return result.rows[0].analytics_data;
+
+    } finally {
+        client.release();
+    }
+};
+
 export const CardModel = {
     createCard,
     getCardsByColumnId,
@@ -1439,10 +1597,11 @@ export const CardModel = {
     copyCard,
     archiveCard,
     unarchiveCard,
-    getArchivedCardsByBoard, // Thêm function mới
+    getArchivedCardsByBoard,
     watchCard,
     unwatchCard,
     isUserWatchingCard,
     getCardWatchers,
     getUserCards,
+    getWorkspaceCardsAnalytics, // Thêm function mới
 };

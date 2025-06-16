@@ -17,6 +17,18 @@ const validate = (req, res, next) => {
 // Lấy tất cả cards của user cho calendar
 router.get('/my-cards', authenticateToken, CardController.getUserCards);
 
+// Lấy analytics cards theo workspace
+router.get(
+    '/analytics/workspace/:workspaceId',
+    authenticateToken,
+    [
+        param('workspaceId').isInt({ min: 1 }).withMessage('Workspace ID phải là số nguyên dương'),
+        query('days').optional().isInt({ min: 1, max: 365 }).withMessage('Days phải từ 1-365')
+    ],
+    validate,
+    CardController.getWorkspaceCardsAnalytics
+);
+
 // Lấy chi tiết đầy đủ của card bao gồm các nhãn, tệp đính kèm, bình luận và hoạt động
 router.get('/details/:id', authenticateToken, CardController.getCardDetails);
 
